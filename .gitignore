@@ -1,0 +1,10 @@
+.vs/
+**/bin/
+**/obj/
+*.user
+*.suo
+
+agent_artifacts/
+**/TestResults/
+**/coverage/
+*.db

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agentic Test Loop 管理台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Agentic Test Loop</p>
+        <h1>图谱、理解卡片与影响分析</h1>
+        <p class="subtitle">面向当前仓库的本地图谱管理界面，支持概览、符号检索、上下文查看与影响分析。</p>
+      </div>
+      <button id="rebuildButton" class="primary">重建图谱</button>
+    </section>
+
+    <section class="grid">
+      <article class="panel summary">
+        <h2>图谱概览</h2>
+        <div id="summaryGrid" class="stats"></div>
+      </article>
+
+      <article class="panel">
+        <h2>节点检索</h2>
+        <div class="searchRow">
+          <input id="searchInput" type="text" placeholder="输入 symbol / namespace / 关键词">
+          <button id="searchButton">查询</button>
+        </div>
+        <div id="nodeList" class="list"></div>
+      </article>
+    </section>
+
+    <section class="grid lower">
+      <article class="panel">
+        <h2>符号上下文</h2>
+        <pre id="contextView" class="codeblock">请选择左侧节点</pre>
+      </article>
+
+      <article class="panel">
+        <h2>影响分析</h2>
+        <pre id="impactView" class="codeblock">请选择左侧节点</pre>
+      </article>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
