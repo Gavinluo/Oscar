@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CodeBrain Repository Explorer</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">CodeBrain</p>
+        <h1>Repository Explorer</h1>
+        <p class="subtitle">为本地仓库提供注册、增量索引、图谱浏览和检索验证的统一入口。</p>
+      </div>
+      <button id="rebuildButton" class="primary">Reindex</button>
+    </section>
+
+    <section class="grid">
+      <article class="panel summary">
+        <h2>Repository Summary</h2>
+        <div class="searchRow">
+          <select id="repositorySelect"></select>
+        </div>
+        <div id="summaryGrid" class="stats"></div>
+      </article>
+
+      <article class="panel">
+        <h2>Graph Nodes</h2>
+        <div class="searchRow">
+          <input id="searchInput" type="text" placeholder="Search symbol / namespace / file">
+          <button id="searchButton">Search</button>
+        </div>
+        <div id="nodeList" class="list"></div>
+      </article>
+    </section>
+
+    <section class="grid lower">
+      <article class="panel">
+        <h2>Symbol Context</h2>
+        <pre id="contextView" class="codeblock">Select a symbol from the left panel.</pre>
+      </article>
+
+      <article class="panel">
+        <h2>Impact Analysis</h2>
+        <pre id="impactView" class="codeblock">Select a symbol from the left panel.</pre>
+      </article>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

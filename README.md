@@ -1,19 +1,142 @@
-﻿# Agentic Test Loop
+# CodeBrain
 
 架构图文档：[ARCHITECTURE.md](/D:/code/CodeBase/agentic_test_loop/ARCHITECTURE.md)
 
-`agentic_test_loop` 是一个基于 .NET 8 的多 Agent 闭环框架，主要用于：
+`CodeBrain` 是一个基于 .NET 8 的本地仓库智能平台。它把仓库注册、增量索引、检索问答和测试闭环放到同一套本地工作流里，当前默认使用 C# / Roslyn 分析器。
 
-- 基于 Roslyn 的仓库扫描、符号解析与调用图分析
-- 生成结构化理解卡片，并维护 `draft` / `stable` 两级记忆
-- 生成 NUnit 测试计划与测试代码
-- 执行 `dotnet test` 并解析失败结果
-- 基于 coverlet + reportgenerator 做覆盖率闭环
-- 通过日志、计划和报告形成可追溯的迭代过程
+## 当前能力
 
-## 默认大模型运行方式
+- 本地仓库注册与目录编目
+- 基于 SQLite 的持久化索引加载
+- 文件级增量索引规划
+- 基于 Roslyn 的 C# 仓库扫描、符号解析与调用图分析
+- 面向不同问题类型的仓库检索
+- 理解卡片 `draft` / `stable` 双层记忆
+- NUnit 测试计划、测试生成、执行与覆盖率闭环
 
-当前默认运行方式为千问，使用 DashScope 的 OpenAI 兼容接口。
+## 项目结构
+
+- `src/CodeBrain.Cli`：`codebrain` 命令行入口
+- `src/CodeBrain.Core`：统一模型、接口与工作流契约
+- `src/CodeBrain.Analysis.CSharp`：C# / Roslyn 分析器
+- `src/CodeBrain.Storage`：SQLite 仓库目录、索引存储、增量规划与产物存储
+- `src/CodeBrain.Execution`：测试执行与覆盖率采集
+- `src/CodeBrain.Workflows`：测试闭环工作流
+- `src/CodeBrain.Api`：本地 API 与浏览器界面
+- `tests/CodeBrain.Tests`：测试
+
+## 索引与存储
+
+CodeBrain 当前把本地数据分成两层：
+
+- `agent_artifacts/*`
+  - 运行日志、理解卡片、测试报告、覆盖率报告
+- `agent_artifacts/index/*.db`
+  - `codebrain.catalog.db`：本地仓库注册目录
+  - `codebrain.index.db`：持久化索引、图谱快照、检索文档
+  - `knowledge.db`：现有图谱/卡片查询存储，继续为测试闭环服务
+
+持久化索引的目标是让查询路径不再依赖每次全量重建。首次索引后，后续查询会优先加载 SQLite 中已保存的索引；重新索引时只对新增、修改、删除的文件做差异比对。
+
+## 构建
+
+```bash
+dotnet build CodeBrain.sln
+```
+
+## 初始化测试闭环
+
+```bash
+dotnet run --project src/CodeBrain.Cli -- init --sln <path-to-sln>
+```
+
+`codebrain init` 会：
+
+- 发现并优先复用已有 NUnit 测试项目
+- 在缺失时生成 `RepoGeneratedTests`
+- 安装测试与覆盖率依赖
+- 生成 `codebrain.config.json`
+- 初始化 `agent_artifacts/*`
+
+## 注册本地仓库
+
+```bash
+dotnet run --project src/CodeBrain.Cli -- repos add --path <local-repository-path>
+dotnet run --project src/CodeBrain.Cli -- repos list
+```
+
+当前只支持 `LocalPath`。`GitUrl` 和 `ZipFile` 暂不内置，因为实际执行和索引仍然基于本地目录。
+
+## 构建或刷新索引
+
+```bash
+dotnet run --project src/CodeBrain.Cli -- index --repo <repository-id>
+```
+
+索引过程会：
+
+- 从仓库目录中扫描 C# 相关文件
+- 对比上次 `manifest`，计算新增、修改、删除、未变文件
+- 生成新的图谱快照与检索文档
+- 持久化到 SQLite
+
+## 进行仓库检索
+
+```bash
+dotnet run --project src/CodeBrain.Cli -- query --repo <repository-id> --q "这个类负责什么？"
+dotnet run --project src/CodeBrain.Cli -- query --repo <repository-id> --q "FindAsync" --intent symbol
+dotnet run --project src/CodeBrain.Cli -- query --repo <repository-id> --q "修改这个接口会影响哪些调用方？" --intent impact
+```
+
+当前支持的检索意图：
+
+- `codeqa`
+- `symbol`
+- `impact`
+- `test`
+- `bug`
+
+## 运行测试闭环
+
+```bash
+dotnet run --project src/CodeBrain.Cli -- run \
+  --sln <path-to-sln-or-csproj> \
+  --target <symbol> \
+  --topk 5 \
+  --depth 3 \
+  --coverage-line 0.6 \
+  --coverage-branch 0.4 \
+  --iterations 10
+```
+
+可选 LLM：
+
+- `--llm qwen`
+- `--llm openai`
+- `--llm dummy`
+
+## 查询 API 与界面
+
+```bash
+dotnet run --project src/CodeBrain.Cli -- serve --port 5088
+```
+
+启动后可访问：
+
+- `http://localhost:5088/`
+- `GET /api/repos`
+- `POST /api/repos`
+- `POST /api/index/{repositoryId}`
+- `POST /api/query`
+- `GET /api/graph/summary?repositoryId=<id>`
+- `GET /api/graph/nodes?repositoryId=<id>&term=<keyword>`
+- `GET /api/graph/context?repositoryId=<id>&symbol=<full-symbol>`
+- `GET /api/graph/impact?repositoryId=<id>&symbol=<full-symbol>`
+- `GET /api/cards?symbol=<full-symbol>`
+
+## 默认模型配置
+
+默认运行方式仍然是千问兼容 OpenAI 接口：
 
 - 默认 Provider：`qwen`
 - 默认模型：`qwen3-max-2026-01-23`
@@ -32,142 +155,17 @@
 - `OPENAI_MODEL`
 - `OPENAI_BASE_URL`
 
-如果没有任何外部模型可用，仍然可以使用：
+## 当前边界
 
-- `--llm dummy`
+当前版本已经完成：
 
-该模式下无需 API Key，也可以跑通完整骨架流程，只是理解和测试生成质量会低一些。
+- 项目品牌从 `AgenticTestLoop` 切换为 `CodeBrain`
+- 本地仓库注册、持久化索引、文件级增量规划
+- 面向仓库检索的 CLI/API 主路径
 
-## 项目结构
+当前仍未完成：
 
-- `src/AgenticTestLoop.Cli`：`atl` 命令行入口
-- `src/AgenticTestLoop.Core`：核心契约、模型、流水线状态、LLM 抽象
-- `src/AgenticTestLoop.Roslyn`：solution 加载、符号解析、调用图、下钻
-- `src/AgenticTestLoop.Execution`：测试执行与覆盖率采集
-- `src/AgenticTestLoop.Storage`：理解卡片、日志、报告、计划的持久化
-- `src/AgenticTestLoop.Agents`：RepoMapper、Understander、Drilldown、TestPlanner、TestWriter、Runner、Coverage、Memory、Orchestrator
-- `tests/AgenticTestLoop.Tests`：框架自身测试
-
-产物默认写入仓库根目录下的：
-
-- `agent_artifacts/understanding/draft`
-- `agent_artifacts/understanding/stable`
-- `agent_artifacts/reports/coverage`
-- `agent_artifacts/reports/test_runs`
-- `agent_artifacts/logs`
-- `agent_artifacts/plans`
-
-## 构建
-
-```bash
-dotnet build agentic_test_loop/AgenticTestLoop.sln
-```
-
-## 初始化
-
-```bash
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- init --sln <path-to-sln>
-```
-
-`atl init` 会执行以下动作：
-
-- 探测已有测试项目，并优先复用 NUnit
-- 如果不存在 NUnit 测试项目，则自动创建
-- 安装所需 NuGet 包
-- 安装 `dotnet-reportgenerator-globaltool`
-- 生成 `agentic_test_loop.config.json`
-- 初始化 `agent_artifacts/*` 目录
-
-## 运行闭环
-
-默认方式为千问：
-
-```bash
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- run \
-  --sln <path-to-sln-or-csproj> \
-  --target <symbol> \
-  --topk 5 \
-  --depth 3 \
-  --coverage-line 0.6 \
-  --coverage-branch 0.4 \
-  --iterations 10
-```
-
-显式指定千问：
-
-```bash
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- run \
-  --sln <path-to-sln-or-csproj> \
-  --target <symbol> \
-  --llm qwen
-```
-
-无 API Key 的本地骨架模式：
-
-```bash
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- run \
-  --sln <path-to-sln-or-csproj> \
-  --target <symbol> \
-  --llm dummy
-```
-
-说明：
-
-- `--target` 可重复传入多个目标
-- 如果未传 `--target`，CLI 会自动选择一个候选 symbol
-- `dummy` 模式能跑完整流程，但理解和测试设计质量较低
-- `qwen` 模式是默认推荐方式，适合更好的理解和测试设计
-
-## Repo Map 与 Drilldown
-
-```bash
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- map --sln <path>
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- drill --sln <path> --symbol <symbol> --topk 5 --depth 3
-```
-
-## 查询 API 与可视化界面
-
-启动本地查询 API 与可视化界面：
-
-```bash
-dotnet run --project agentic_test_loop/src/AgenticTestLoop.Cli -- serve --port 5088
-```
-
-启动后可访问：
-
-- `http://localhost:5088/`：本地图谱管理界面
-- `http://localhost:5088/api/graph/summary`：图谱摘要
-- `http://localhost:5088/api/graph/nodes?term=<keyword>`：节点搜索
-- `http://localhost:5088/api/graph/context?symbol=<full-symbol>`：符号上下文
-- `http://localhost:5088/api/graph/impact?symbol=<full-symbol>`：影响分析
-- `http://localhost:5088/api/graph/rebuild`：重建图谱
-- `http://localhost:5088/api/cards?symbol=<full-symbol>`：理解卡片查询
-
-当前采用双层存储：
-
-- 文件层：`agent_artifacts/*`，用于审计和追溯
-- SQLite 层：`agent_artifacts/index/knowledge.db`，用于图谱与查询索引
-
-## 记忆升级规则
-
-理解卡片总是先写入 `draft`。
-
-只有满足以下条件时，才允许升级为 `stable`：
-
-- 测试全部通过
-- 覆盖率达到配置阈值
-- 能够记录 `verified_by`，并关联测试与覆盖率结果
-
-## 扩展点
-
-- 实现 `ILLMProvider` 可增加新的大模型 Provider
-- 扩展 `TestPlannerAgent` 或 `TestWriterAgent` 可自定义测试生成策略
-- 实现 `ITestExecutionService` 或 `ICoverageService` 可替换执行与覆盖率模块
-- 实现 `IAgent` 并接入 `LoopOrchestrator` 可增加新的 Agent
-
-## 常见输出
-
-- `agent_artifacts/reports/test_runs/latest.md`：最近一次运行摘要
-- `agent_artifacts/reports/coverage/summary.json`：覆盖率摘要与热点
-- `agent_artifacts/plans/*.testplan.json`：生成的测试矩阵
-- `agent_artifacts/understanding/draft|stable/*.json`：理解卡片
+- 多语言分析 backend
+- 向量检索落地
+- 多仓库融合排序
+- 非 C# backend 的统一 analyzer 实现

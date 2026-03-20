@@ -1,81 +1,160 @@
-﻿# Agentic Test Loop 架构说明
+# CodeBrain 架构说明
 
 ## 概览
 
-当前仓库可以分为两个协作层：
+CodeBrain 当前包含两条并行能力链：
 
-- `webapi`：被分析、被理解、被测试的业务解决方案
-- `agentic_test_loop`：负责扫描代码、生成理解、写测试、执行验证、沉淀记忆的 Agent 框架
+- 仓库智能链：本地仓库注册、增量索引、持久化索引加载、仓库检索
+- 测试闭环链：理解、下钻、测试计划、测试生成、执行、覆盖率、记忆升级
 
 ## 总体架构
 
 ```mermaid
 flowchart LR
-    U["用户 / CLI"] --> CLI["AgenticTestLoop.Cli\natl init/run/map/drill"]
-    CLI --> ORCH["LoopOrchestrator"]
-    ORCH --> AGENTS["Agent 层\nRepoMapper / Understander / Drilldown / TestPlanner / TestWriter / Runner / Coverage / Memory"]
+    U["用户 / CLI / API"] --> CLI["CodeBrain.Cli\nrepos / index / query / run / serve"]
+    U --> API["CodeBrain.Api\nREST + UI"]
 
-    AGENTS --> CORE["AgenticTestLoop.Core\n契约 / 模型 / PipelineState / ILLMProvider"]
-    AGENTS --> ROSLYN["AgenticTestLoop.Roslyn\nSolution 加载 / Symbol 解析 / 调用图 / 下钻"]
-    AGENTS --> EXEC["AgenticTestLoop.Execution\ndotnet test / coverage / reportgenerator"]
-    AGENTS --> STORE["AgenticTestLoop.Storage\nunderstanding / logs / reports / plans"]
+    CLI --> CATALOG["Repository Catalog\nSQLite"]
+    CLI --> INDEX["Index Pipeline"]
+    CLI --> QUERY["Query Pipeline"]
+    CLI --> LOOP["Closed-loop Test Workflow"]
 
-    ROSLYN --> TARGET["webapi / QuantumCorp.ApiGates.sln\n业务源码"]
-    EXEC --> TESTPROJ["NUnit 测试工程"]
-    STORE --> ART["agent_artifacts\nunderstanding / reports / logs / plans"]
+    API --> CATALOG
+    API --> INDEX
+    API --> QUERY
 
-    LLM["LLM Provider\nDummy / OpenAI 兼容 / Qwen 兼容"] --> AGENTS
+    INDEX --> ANALYZER["CodeBrain.Analysis.CSharp\nRoslyn Analyzer"]
+    INDEX --> STORE["CodeBrain.Storage\nIndex Store / Artifact Store"]
+    QUERY --> STORE
+    LOOP --> ANALYZER
+    LOOP --> STORE
+    LOOP --> EXEC["CodeBrain.Execution\nTests / Coverage"]
+
+    STORE --> ART["agent_artifacts"]
+    ANALYZER --> TARGET["Local Repository"]
 ```
 
-## `agentic_test_loop` 内部项目依赖图
+## 当前项目依赖图
 
 ```mermaid
 flowchart TD
-    CORE["AgenticTestLoop.Core"]
-    ROSLYN["AgenticTestLoop.Roslyn"]
-    EXEC["AgenticTestLoop.Execution"]
-    STORE["AgenticTestLoop.Storage"]
-    AGENTS["AgenticTestLoop.Agents"]
-    CLI["AgenticTestLoop.Cli"]
-    TESTS["AgenticTestLoop.Tests"]
+    CORE["CodeBrain.Core"]
+    ANALYZER["CodeBrain.Analysis.CSharp"]
+    STORE["CodeBrain.Storage"]
+    EXEC["CodeBrain.Execution"]
+    WORKFLOWS["CodeBrain.Workflows"]
+    CLI["CodeBrain.Cli"]
+    API["CodeBrain.Api"]
+    TESTS["CodeBrain.Tests"]
 
-    ROSLYN --> CORE
-    EXEC --> CORE
+    ANALYZER --> CORE
     STORE --> CORE
-    AGENTS --> CORE
-    AGENTS --> ROSLYN
-    AGENTS --> EXEC
-    AGENTS --> STORE
+    EXEC --> CORE
+    WORKFLOWS --> CORE
+    WORKFLOWS --> ANALYZER
+    WORKFLOWS --> STORE
+    WORKFLOWS --> EXEC
     CLI --> CORE
-    CLI --> ROSLYN
-    CLI --> EXEC
+    CLI --> ANALYZER
     CLI --> STORE
-    CLI --> AGENTS
+    CLI --> EXEC
+    CLI --> WORKFLOWS
+    API --> CORE
+    API --> ANALYZER
+    API --> STORE
     TESTS --> CORE
-    TESTS --> ROSLYN
-    TESTS --> EXEC
+    TESTS --> ANALYZER
     TESTS --> STORE
-    TESTS --> AGENTS
+    TESTS --> EXEC
+    TESTS --> WORKFLOWS
+    TESTS --> API
 ```
 
-## 闭环执行流程
+## 索引链路
 
 ```mermaid
 flowchart LR
-    A["atl run"] --> B["RepoMapper\n建立 solution / symbol / 调用图"]
-    B --> C["Understander\n生成 Understanding Card"]
-    C --> D["DrilldownNavigator\n执行 Top-K / Depth 下钻"]
-    D --> E["TestPlanner\n生成测试矩阵"]
-    E --> F["TestWriter\n生成 NUnit 测试代码"]
-    F --> G["Runner\ndotnet test"]
-    G --> H["Coverage\ncoverlet + reportgenerator"]
-    H --> I{"达到阈值?"}
-    I -- "否" --> C
-    I -- "是" --> J["Memory\n将 draft 升级为 stable"]
+    A["codebrain repos add"] --> B["Repository Catalog"]
+    B --> C["codebrain index --repo <id>"]
+    C --> D["Load previous manifest"]
+    D --> E["Compare local files"]
+    E --> F["RepositoryChangeSet"]
+    F --> G["CSharpRepositoryAnalyzer"]
+    G --> H["RepositoryIndex\nmanifest + graph + documents"]
+    H --> I["SQLite persisted index"]
 ```
 
-## 当前边界划分
+关键点：
 
-- `agentic_test_loop`：平台层
-- `webapi`：业务目标层
-- `agent_artifacts`：执行产物层
+- 只支持 `LocalPath`
+- 增量索引目前是文件级
+- 检索文档来自图谱节点和符号摘要
+- 图谱快照和检索文档统一持久化
+
+## 查询链路
+
+```mermaid
+flowchart LR
+    A["codebrain query"] --> B["Load persisted index"]
+    B --> C["Parse QueryIntent"]
+    C --> D["RepositoryQuery"]
+    D --> E["RepositoryIndexDocument scoring"]
+    E --> F["RepositoryQueryResult"]
+```
+
+当前支持的 `QueryIntent`：
+
+- `CodeQa`
+- `SymbolLookup`
+- `ImpactAnalysis`
+- `TestGeneration`
+- `BugLocalization`
+
+当前检索策略仍然是轻量规则检索，不包含向量检索。后续可以在 `IRepositoryQueryService` 背后替换为 BM25 + 向量 + 图融合检索，而不改 CLI/API 契约。
+
+## 测试闭环链路
+
+```mermaid
+flowchart LR
+    A["codebrain run"] --> B["RepoMapper"]
+    B --> C["Understander"]
+    C --> D["DrilldownNavigator"]
+    D --> E["TestPlanner"]
+    E --> F["TestWriter"]
+    F --> G["Runner"]
+    G --> H["Coverage"]
+    H --> I{"Coverage OK?"}
+    I -- "No" --> C
+    I -- "Yes" --> J["Memory"]
+```
+
+测试闭环仍然复用：
+
+- Roslyn 图谱
+- 理解卡片
+- 测试执行与覆盖率收集
+- `draft -> stable` 的记忆升级规则
+
+## 数据模型分层
+
+- `RegisteredRepository`
+  - 仓库目录项
+- `RepositoryIndexManifest`
+  - 上次索引的文件指纹集合
+- `RepositoryChangeSet`
+  - 本次增量差异
+- `RepositoryIndexDocument`
+  - 检索文档
+- `RepositoryIndex`
+  - 持久化索引聚合
+- `RepositoryQuery`
+  - 查询请求
+- `RepositoryQueryResult`
+  - 查询结果
+
+## 后续扩展方向
+
+1. 增加 `IRepositoryAnalyzer` 的新 backend，实现多语言适配。
+2. 在 `IRepositoryQueryService` 后增加向量检索与混合排序。
+3. 在 `IRepositoryCatalog` 和 `IRepositoryIndexStore` 上增加多仓库批量查询与选择策略。
+4. 将当前 C# analyzer 从“Roslyn map + graph”进一步升级为统一中间语义模型输出。
