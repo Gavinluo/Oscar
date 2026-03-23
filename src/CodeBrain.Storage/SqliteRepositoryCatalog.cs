@@ -34,13 +34,14 @@ public sealed class SqliteRepositoryCatalog : IRepositoryCatalog
             return existing;
         }
 
+        var (language, analyzerId) = RepositoryLanguageDetector.Detect(fullPath);
         var repository = new RegisteredRepository
         {
             Id = BuildRepositoryId(fullPath),
             DisplayName = Path.GetFileName(fullPath),
             RootPath = fullPath,
-            AnalyzerId = "csharp-roslyn",
-            PrimaryLanguage = "csharp"
+            AnalyzerId = analyzerId,
+            PrimaryLanguage = language
         };
 
         await using var connection = new SqliteConnection(_connectionString);

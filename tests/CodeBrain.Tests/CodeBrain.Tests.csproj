@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeBrain.Core\CodeBrain.Core.csproj" />
     <ProjectReference Include="..\..\src\CodeBrain.Analysis.CSharp\CodeBrain.Analysis.CSharp.csproj" />
+    <ProjectReference Include="..\..\src\CodeBrain.Analysis.Text\CodeBrain.Analysis.Text.csproj" />
     <ProjectReference Include="..\..\src\CodeBrain.Execution\CodeBrain.Execution.csproj" />
     <ProjectReference Include="..\..\src\CodeBrain.Storage\CodeBrain.Storage.csproj" />
     <ProjectReference Include="..\..\src\CodeBrain.Workflows\CodeBrain.Workflows.csproj" />

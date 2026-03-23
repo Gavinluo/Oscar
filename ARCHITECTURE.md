@@ -1,160 +1,173 @@
-# CodeBrain 架构说明
+# CodeBrain Architecture
 
-## 概览
+## Overview
 
-CodeBrain 当前包含两条并行能力链：
+CodeBrain now has three major execution paths that share the same persisted
+repository intelligence model:
 
-- 仓库智能链：本地仓库注册、增量索引、持久化索引加载、仓库检索
-- 测试闭环链：理解、下钻、测试计划、测试生成、执行、覆盖率、记忆升级
+1. Index pipeline.
+2. Query pipeline.
+3. Closed-loop modification and verification pipeline.
 
-## 总体架构
+## System View
 
 ```mermaid
 flowchart LR
-    U["用户 / CLI / API"] --> CLI["CodeBrain.Cli\nrepos / index / query / run / serve"]
-    U --> API["CodeBrain.Api\nREST + UI"]
+    U["User / CLI / API"] --> CLI["CodeBrain.Cli"]
+    U --> API["CodeBrain.Api"]
 
-    CLI --> CATALOG["Repository Catalog\nSQLite"]
+    CLI --> CATALOG["Repository Catalog (SQLite)"]
     CLI --> INDEX["Index Pipeline"]
-    CLI --> QUERY["Query Pipeline"]
-    CLI --> LOOP["Closed-loop Test Workflow"]
+    CLI --> QUERY["Hybrid Query Pipeline"]
+    CLI --> LOOP["Closed-loop Workflow"]
 
     API --> CATALOG
     API --> INDEX
     API --> QUERY
 
-    INDEX --> ANALYZER["CodeBrain.Analysis.CSharp\nRoslyn Analyzer"]
-    INDEX --> STORE["CodeBrain.Storage\nIndex Store / Artifact Store"]
+    INDEX --> ANALYZERS["Analyzer Backends"]
+    ANALYZERS --> ROSLYN["CodeBrain.Analysis.CSharp"]
+    ANALYZERS --> TEXT["CodeBrain.Analysis.Text"]
+
+    INDEX --> STORE["SqliteRepositoryIndexStore"]
     QUERY --> STORE
-    LOOP --> ANALYZER
     LOOP --> STORE
-    LOOP --> EXEC["CodeBrain.Execution\nTests / Coverage"]
 
-    STORE --> ART["agent_artifacts"]
-    ANALYZER --> TARGET["Local Repository"]
+    LOOP --> EXEC["CodeBrain.Execution"]
+    LOOP --> ART["agent_artifacts"]
 ```
 
-## 当前项目依赖图
-
-```mermaid
-flowchart TD
-    CORE["CodeBrain.Core"]
-    ANALYZER["CodeBrain.Analysis.CSharp"]
-    STORE["CodeBrain.Storage"]
-    EXEC["CodeBrain.Execution"]
-    WORKFLOWS["CodeBrain.Workflows"]
-    CLI["CodeBrain.Cli"]
-    API["CodeBrain.Api"]
-    TESTS["CodeBrain.Tests"]
-
-    ANALYZER --> CORE
-    STORE --> CORE
-    EXEC --> CORE
-    WORKFLOWS --> CORE
-    WORKFLOWS --> ANALYZER
-    WORKFLOWS --> STORE
-    WORKFLOWS --> EXEC
-    CLI --> CORE
-    CLI --> ANALYZER
-    CLI --> STORE
-    CLI --> EXEC
-    CLI --> WORKFLOWS
-    API --> CORE
-    API --> ANALYZER
-    API --> STORE
-    TESTS --> CORE
-    TESTS --> ANALYZER
-    TESTS --> STORE
-    TESTS --> EXEC
-    TESTS --> WORKFLOWS
-    TESTS --> API
-```
-
-## 索引链路
+## Index Pipeline
 
 ```mermaid
 flowchart LR
-    A["codebrain repos add"] --> B["Repository Catalog"]
-    B --> C["codebrain index --repo <id>"]
-    C --> D["Load previous manifest"]
-    D --> E["Compare local files"]
-    E --> F["RepositoryChangeSet"]
-    F --> G["CSharpRepositoryAnalyzer"]
-    G --> H["RepositoryIndex\nmanifest + graph + documents"]
-    H --> I["SQLite persisted index"]
+    A["repos add"] --> B["RepositoryLanguageDetector"]
+    B --> C["RegisteredRepository"]
+    C --> D["index --repo <id>"]
+    D --> E["Load previous manifest"]
+    E --> F["Git-aware incremental planner"]
+    F --> G["Resolve analyzer backend"]
+    G --> H["Analyzer emits map + graph + documents"]
+    H --> I["Local embeddings generated"]
+    I --> J["SQLite persisted index"]
 ```
 
-关键点：
+Key points:
 
-- 只支持 `LocalPath`
-- 增量索引目前是文件级
-- 检索文档来自图谱节点和符号摘要
-- 图谱快照和检索文档统一持久化
+- Repository registration selects the analyzer backend automatically.
+- `LocalFileIncrementalIndexPlanner` now prefers Git state when available.
+- The manifest records:
+  - analyzer id,
+  - primary language,
+  - head commit,
+  - change detection mode,
+  - file fingerprints.
 
-## 查询链路
+## Query Pipeline
 
 ```mermaid
 flowchart LR
-    A["codebrain query"] --> B["Load persisted index"]
-    B --> C["Parse QueryIntent"]
-    C --> D["RepositoryQuery"]
-    D --> E["RepositoryIndexDocument scoring"]
-    E --> F["RepositoryQueryResult"]
+    A["query"] --> B["Load persisted docs + graph + embeddings"]
+    B --> C["BM25 lexical scorer"]
+    B --> D["Local vector scorer"]
+    B --> E["Graph neighborhood expansion"]
+    C --> F["Hybrid ranker"]
+    D --> F
+    E --> F
+    F --> G["Context assembler"]
+    G --> H["Edit planning service"]
+    H --> I["RepositoryQueryResult"]
 ```
 
-当前支持的 `QueryIntent`：
+The hybrid query result includes:
 
-- `CodeQa`
-- `SymbolLookup`
-- `ImpactAnalysis`
-- `TestGeneration`
-- `BugLocalization`
+- ranked hits,
+- score decomposition,
+- related symbols,
+- assembled context bundle,
+- suggested edit plan.
 
-当前检索策略仍然是轻量规则检索，不包含向量检索。后续可以在 `IRepositoryQueryService` 背后替换为 BM25 + 向量 + 图融合检索，而不改 CLI/API 契约。
-
-## 测试闭环链路
+## Closed-loop Workflow
 
 ```mermaid
 flowchart LR
-    A["codebrain run"] --> B["RepoMapper"]
-    B --> C["Understander"]
-    C --> D["DrilldownNavigator"]
-    D --> E["TestPlanner"]
-    E --> F["TestWriter"]
-    F --> G["Runner"]
-    G --> H["Coverage"]
-    H --> I{"Coverage OK?"}
-    I -- "No" --> C
-    I -- "Yes" --> J["Memory"]
+    A["run"] --> B["RepoMapperAgent"]
+    B --> C["UnderstanderAgent"]
+    C --> D["DrilldownNavigatorAgent"]
+    D --> E["ChangeScopeAgent"]
+    E --> F["EditPlannerAgent"]
+    F --> G["TestPlannerAgent"]
+    G --> H["TestWriterAgent"]
+    H --> I["RunnerAgent"]
+    I --> J["CoverageAgent"]
+    J --> K{"Threshold met?"}
+    K -- "No" --> C
+    K -- "Yes" --> L["MemoryAgent"]
 ```
 
-测试闭环仍然复用：
+This is the current implementation of the modification execution loop:
 
-- Roslyn 图谱
-- 理解卡片
-- 测试执行与覆盖率收集
-- `draft -> stable` 的记忆升级规则
+- retrieval and drilldown narrow the probable edit surface,
+- change scope captures bounded impact,
+- edit plan defines files, symbols, and verification targets,
+- test generation and execution validate the proposed change path.
 
-## 数据模型分层
+## Analyzer Backends
+
+### `csharp-roslyn`
+
+Responsibilities:
+
+- solution/project loading,
+- symbol resolution,
+- call graph extraction,
+- knowledge graph generation,
+- C# retrieval document generation.
+
+### `text-structure`
+
+Responsibilities:
+
+- non-C# file discovery,
+- simple declaration extraction,
+- simple import/reference extraction,
+- structural graph generation,
+- file/symbol document generation for retrieval.
+
+This backend is intentionally lightweight. Its purpose is to make the analyzer
+layer extensible before a deeper multi-language implementation is added.
+
+## Core Data Models
 
 - `RegisteredRepository`
-  - 仓库目录项
+  Repository identity and backend selection.
 - `RepositoryIndexManifest`
-  - 上次索引的文件指纹集合
+  Persisted index metadata and Git/file fingerprints.
 - `RepositoryChangeSet`
-  - 本次增量差异
+  Git-aware or filesystem-aware incremental diff summary.
 - `RepositoryIndexDocument`
-  - 检索文档
-- `RepositoryIndex`
-  - 持久化索引聚合
-- `RepositoryQuery`
-  - 查询请求
-- `RepositoryQueryResult`
-  - 查询结果
+  Retrieval unit with explicit `SearchText`.
+- `RepositoryContextBundle`
+  Assembled evidence packet for QA and editing.
+- `RepositoryChangeScope`
+  Bounded edit surface derived from graph context.
+- `RepositoryEditPlan`
+  Suggested files, symbols, and verification actions.
 
-## 后续扩展方向
+## Design Notes
 
-1. 增加 `IRepositoryAnalyzer` 的新 backend，实现多语言适配。
-2. 在 `IRepositoryQueryService` 后增加向量检索与混合排序。
-3. 在 `IRepositoryCatalog` 和 `IRepositoryIndexStore` 上增加多仓库批量查询与选择策略。
-4. 将当前 C# analyzer 从“Roslyn map + graph”进一步升级为统一中间语义模型输出。
+- The local vector layer is deterministic and self-contained. It avoids an
+  external embedding dependency while still exercising the vector branch of the
+  hybrid retriever.
+- Hybrid retrieval quality is intentionally explainable. Each hit exposes the
+  BM25, vector, and graph contribution used to compute the final score.
+- The second analyzer backend is structural rather than semantic. It is
+  designed to validate the abstraction boundary first.
+
+## Next Recommended Improvements
+
+1. Replace the local vector implementation with a pluggable embedding provider.
+2. Add Git diff range selection and staged/unstaged filtering to the planner.
+3. Move hybrid retrieval into a dedicated `CodeBrain.Search` project.
+4. Replace placeholder test scaffolds with edit-aware test synthesis.
+5. Extend the second backend from structural parsing to real AST-based parsing.

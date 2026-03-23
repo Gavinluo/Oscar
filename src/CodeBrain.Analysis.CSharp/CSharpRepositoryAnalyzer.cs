@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using CodeBrain.Core.Abstractions;
 using CodeBrain.Core.Models;
 
@@ -38,7 +37,9 @@ public sealed class CSharpRepositoryAnalyzer : IRepositoryAnalyzer
             AnalyzerId = Id,
             PrimaryLanguage = repository.PrimaryLanguage,
             IndexedAt = DateTimeOffset.UtcNow,
-            Files = await ScanFilesAsync(repository.RootPath, cancellationToken)
+            HeadCommit = request.ChangeSet.HeadCommit,
+            ChangeDetectionMode = request.ChangeSet.DetectionMode,
+            Files = await RepositoryFileScanner.ScanAsync(repository.RootPath, cancellationToken)
         };
 
         return new RepositoryAnalysisResult
@@ -66,7 +67,8 @@ public sealed class CSharpRepositoryAnalyzer : IRepositoryAnalyzer
                 Title = Path.GetFileNameWithoutExtension(project),
                 Content = $"Project file: {project}",
                 FilePath = project,
-                Language = repository.PrimaryLanguage
+                Language = repository.PrimaryLanguage,
+                SearchText = $"{Path.GetFileNameWithoutExtension(project)} {project}"
             });
         }
 
@@ -83,7 +85,26 @@ public sealed class CSharpRepositoryAnalyzer : IRepositoryAnalyzer
                 Symbol = symbolNode.Symbol,
                 FilePath = symbolNode.FilePath,
                 Language = repository.PrimaryLanguage,
-                Content = $"Symbol: {symbolNode.Symbol}\nNamespace: {containedBy}\nCalls: {relatedCalls}\nFile: {symbolNode.FilePath}"
+                Content = $"Symbol: {symbolNode.Symbol}\nNamespace: {containedBy}\nCalls: {relatedCalls}\nFile: {symbolNode.FilePath}",
+                SearchText = $"{symbolNode.Label} {symbolNode.Symbol} {containedBy} {symbolNode.FilePath}"
+            });
+        }
+
+        foreach (var group in graph.Nodes
+                     .Where(node => node.Kind == "symbol" && !string.IsNullOrWhiteSpace(node.FilePath))
+                     .GroupBy(node => node.FilePath!, StringComparer.OrdinalIgnoreCase))
+        {
+            var filePath = group.Key;
+            var symbolLabels = group.Select(node => node.Label).Distinct(StringComparer.Ordinal).Take(20).ToList();
+            documents.Add(new RepositoryIndexDocument
+            {
+                RepositoryId = repository.Id,
+                Kind = "file",
+                Title = Path.GetFileName(filePath),
+                FilePath = filePath,
+                Language = repository.PrimaryLanguage,
+                Content = $"File summary: {filePath}\nSymbols: {string.Join(", ", symbolLabels)}",
+                SearchText = $"{filePath} {string.Join(' ', symbolLabels)}"
             });
         }
 
@@ -95,7 +116,8 @@ public sealed class CSharpRepositoryAnalyzer : IRepositoryAnalyzer
                 Kind = "namespace",
                 Title = namespaceName,
                 Language = repository.PrimaryLanguage,
-                Content = $"Namespace: {namespaceName}"
+                Content = $"Namespace: {namespaceName}",
+                SearchText = namespaceName
             });
         }
 
@@ -118,35 +140,5 @@ public sealed class CSharpRepositoryAnalyzer : IRepositoryAnalyzer
         }
 
         throw new InvalidOperationException($"No C# solution or project found under {rootPath}.");
-    }
-
-    private static async Task<List<RepositoryFileFingerprint>> ScanFilesAsync(string rootPath, CancellationToken cancellationToken)
-    {
-        var files = new List<RepositoryFileFingerprint>();
-
-        foreach (var path in Directory.EnumerateFiles(rootPath, "*.cs", SearchOption.AllDirectories))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
-                path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var info = new FileInfo(path);
-            await using var stream = File.OpenRead(path);
-            var hash = await SHA256.HashDataAsync(stream, cancellationToken);
-
-            files.Add(new RepositoryFileFingerprint
-            {
-                RelativePath = Path.GetRelativePath(rootPath, path),
-                Size = info.Length,
-                LastWriteTimeUtc = info.LastWriteTimeUtc,
-                ContentHash = Convert.ToHexString(hash),
-                Language = "csharp"
-            });
-        }
-
-        return files;
     }
 }

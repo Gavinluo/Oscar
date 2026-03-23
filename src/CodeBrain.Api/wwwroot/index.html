@@ -3,48 +3,160 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CodeBrain Repository Explorer</title>
+  <title>CodeBrain Workspace</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="shell">
+  <main class="workspace">
     <section class="hero">
-      <div>
-        <p class="eyebrow">CodeBrain</p>
-        <h1>Repository Explorer</h1>
-        <p class="subtitle">为本地仓库提供注册、增量索引、图谱浏览和检索验证的统一入口。</p>
+      <div class="hero-copy">
+        <p class="eyebrow">CodeBrain Workspace</p>
+        <h1>面向仓库理解、提问与修改验证的本地工作台</h1>
+        <p class="subtitle">在同一个界面里完成仓库选择、增量索引、问题检索、证据浏览、代码定位和修改范围评估。</p>
       </div>
-      <button id="rebuildButton" class="primary">Reindex</button>
+      <div class="hero-actions">
+        <button id="rebuildButton" class="primary">Reindex Repository</button>
+        <div id="statusBadge" class="statusBadge">Ready</div>
+      </div>
     </section>
 
-    <section class="grid">
-      <article class="panel summary">
-        <h2>Repository Summary</h2>
-        <div class="searchRow">
+    <section class="topGrid">
+      <article class="panel repositoryPanel">
+        <div class="panelHeader">
+          <div>
+            <p class="panelEyebrow">Repository</p>
+            <h2>当前仓库</h2>
+          </div>
+        </div>
+        <div class="repositoryPicker">
           <select id="repositorySelect"></select>
         </div>
         <div id="summaryGrid" class="stats"></div>
+        <div id="repositoryMeta" class="repositoryMeta"></div>
       </article>
 
-      <article class="panel">
-        <h2>Graph Nodes</h2>
+      <article class="panel questionPanel">
+        <div class="panelHeader">
+          <div>
+            <p class="panelEyebrow">Ask</p>
+            <h2>向仓库提问</h2>
+          </div>
+        </div>
+        <label class="fieldLabel" for="questionInput">问题</label>
+        <textarea id="questionInput" class="questionInput" placeholder="例如：修改 token 计费逻辑会影响哪些地方？"></textarea>
+        <div class="questionControls">
+          <label class="control">
+            <span>Intent</span>
+            <select id="intentSelect">
+              <option value="codeqa">Code QA</option>
+              <option value="symbol">Symbol</option>
+              <option value="impact">Impact</option>
+              <option value="test">Test</option>
+              <option value="bug">Bug</option>
+            </select>
+          </label>
+          <label class="control">
+            <span>Graph Depth</span>
+            <input id="graphDepthInput" type="number" min="1" max="5" value="2">
+          </label>
+          <label class="control">
+            <span>Limit</span>
+            <input id="limitInput" type="number" min="3" max="20" value="8">
+          </label>
+        </div>
+        <div class="queryActions">
+          <button id="askButton" class="primary">Ask Repository</button>
+          <button id="browseButton" class="ghost">Browse Symbols</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="answerGrid">
+      <article class="panel answerPanel">
+        <div class="panelHeader">
+          <div>
+            <p class="panelEyebrow">Answer</p>
+            <h2>回答与执行建议</h2>
+          </div>
+        </div>
+        <div id="answerSummary" class="answerSummary emptyState">在上方输入问题，系统会返回上下文摘要、证据和建议修改范围。</div>
+        <div class="answerMeta">
+          <div id="strategyChip" class="chip">Hybrid Retrieval</div>
+          <div id="queryMeta" class="queryMeta"></div>
+        </div>
+        <section class="subsection">
+          <h3>Suggested Edit Plan</h3>
+          <div id="editPlanView" class="cardStack emptyState">暂无修改计划。</div>
+        </section>
+        <section class="subsection">
+          <h3>Evidence</h3>
+          <div id="evidenceList" class="evidenceList emptyState">暂无证据。</div>
+        </section>
+      </article>
+
+      <article class="panel sidePanel">
+        <div class="panelHeader">
+          <div>
+            <p class="panelEyebrow">Context</p>
+            <h2>仓库上下文</h2>
+          </div>
+        </div>
+        <section class="subsection compact">
+          <h3>Context Snapshot</h3>
+          <div id="contextSummary" class="contextSummary emptyState">暂无上下文。</div>
+        </section>
+        <section class="subsection compact">
+          <h3>Files</h3>
+          <div id="filesList" class="pillList emptyState">暂无文件。</div>
+        </section>
+        <section class="subsection compact">
+          <h3>Symbols</h3>
+          <div id="symbolsList" class="pillList emptyState">暂无符号。</div>
+        </section>
+        <section class="subsection compact">
+          <h3>Graph Neighbors</h3>
+          <div id="neighborsList" class="pillList emptyState">暂无图邻居。</div>
+        </section>
+      </article>
+    </section>
+
+    <section class="bottomGrid">
+      <article class="panel browserPanel">
+        <div class="panelHeader">
+          <div>
+            <p class="panelEyebrow">Browse</p>
+            <h2>仓库节点浏览</h2>
+          </div>
+        </div>
         <div class="searchRow">
           <input id="searchInput" type="text" placeholder="Search symbol / namespace / file">
           <button id="searchButton">Search</button>
         </div>
         <div id="nodeList" class="list"></div>
       </article>
-    </section>
 
-    <section class="grid lower">
-      <article class="panel">
-        <h2>Symbol Context</h2>
-        <pre id="contextView" class="codeblock">Select a symbol from the left panel.</pre>
-      </article>
-
-      <article class="panel">
-        <h2>Impact Analysis</h2>
-        <pre id="impactView" class="codeblock">Select a symbol from the left panel.</pre>
+      <article class="panel previewPanel">
+        <div class="panelHeader">
+          <div>
+            <p class="panelEyebrow">Inspect</p>
+            <h2>代码与影响预览</h2>
+          </div>
+        </div>
+        <div class="previewTabs">
+          <button class="tab active" data-tab="source">Source</button>
+          <button class="tab" data-tab="context">Context</button>
+          <button class="tab" data-tab="impact">Impact</button>
+        </div>
+        <div id="sourcePanel" class="tabPanel active">
+          <div id="sourceMeta" class="sourceMeta">选择一个符号或证据项查看源码片段。</div>
+          <pre id="sourceView" class="codeblock">No source loaded.</pre>
+        </div>
+        <div id="contextPanel" class="tabPanel">
+          <div id="contextCards" class="contextCards emptyState">选择一个符号查看上下文卡片。</div>
+        </div>
+        <div id="impactPanel" class="tabPanel">
+          <div id="impactCards" class="impactCards emptyState">选择一个符号查看影响分析。</div>
+        </div>
       </article>
     </section>
   </main>

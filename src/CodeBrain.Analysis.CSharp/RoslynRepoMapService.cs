@@ -332,7 +332,61 @@ public sealed class RoslynRepoMapService : IRepoMapService
             return exactTypeMethodMatches[0];
         }
 
+        var normalizedMatches = _cachedMap.CallGraph.Callees.Keys
+            .Where(key => string.Equals(NormalizeSymbolKey(key), NormalizeSymbolKey(normalizedQuery), StringComparison.Ordinal))
+            .ToList();
+        if (normalizedMatches.Count == 1)
+        {
+            return normalizedMatches[0];
+        }
+
+        var queryMemberName = ExtractTypeAndMember(normalizedQuery);
+        if (queryMemberName is not null)
+        {
+            var memberMatches = _cachedMap.CallGraph.Callees.Keys
+                .Where(key => string.Equals(ExtractTypeAndMember(key), queryMemberName, StringComparison.Ordinal))
+                .OrderBy(key => key.Length)
+                .ToList();
+            if (memberMatches.Count == 1)
+            {
+                return memberMatches[0];
+            }
+        }
+
         return null;
+    }
+
+    private static string NormalizeSymbolKey(string value)
+    {
+        var builder = new string(value
+            .Replace("global::", string.Empty, StringComparison.Ordinal)
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
+        return builder.ToLowerInvariant();
+    }
+
+    private static string? ExtractTypeAndMember(string symbol)
+    {
+        var trimmed = symbol.Replace("global::", string.Empty, StringComparison.Ordinal);
+        var parenIndex = trimmed.IndexOf('(');
+        if (parenIndex >= 0)
+        {
+            trimmed = trimmed[..parenIndex];
+        }
+
+        var lastDot = trimmed.LastIndexOf('.');
+        if (lastDot <= 0)
+        {
+            return null;
+        }
+
+        var typeBoundary = trimmed.LastIndexOf('.', lastDot - 1);
+        if (typeBoundary < 0)
+        {
+            return trimmed;
+        }
+
+        return trimmed[(typeBoundary + 1)..];
     }
 
     private static string GetSimpleMemberName(string symbol)

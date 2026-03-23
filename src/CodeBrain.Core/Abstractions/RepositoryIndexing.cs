@@ -32,3 +32,16 @@ public interface IRepositoryQueryService
 {
     Task<RepositoryQueryResult> QueryAsync(RepositoryQuery query, CancellationToken cancellationToken);
 }
+
+public interface IContextAssembler
+{
+    RepositoryContextBundle Assemble(
+        RepositoryQuery query,
+        IReadOnlyCollection<RepositoryQueryHit> hits,
+        IReadOnlyCollection<KnowledgeNode> relatedNodes);
+}
+
+public interface IEditPlanningService
+{
+    RepositoryEditPlan BuildPlan(RepositoryQuery query, RepositoryContextBundle context);
+}

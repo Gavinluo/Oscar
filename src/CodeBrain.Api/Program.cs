@@ -1,4 +1,5 @@
 using CodeBrain.Analysis.CSharp;
+using CodeBrain.Analysis.Text;
 using CodeBrain.Core.Models;
 using CodeBrain.Storage;
 
@@ -10,11 +11,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 
-var workspaceRoot = ResolveWorkspaceRoot();
+var workspaceRoot = ResolveCodeBrainWorkspaceRoot();
 var catalog = new SqliteRepositoryCatalog(workspaceRoot);
 var planner = new LocalFileIncrementalIndexPlanner();
 var indexStore = new SqliteRepositoryIndexStore(workspaceRoot);
-var analyzer = new CSharpRepositoryAnalyzer();
 var artifactStore = new FileArtifactStore(workspaceRoot);
 
 app.UseDefaultFiles();
@@ -39,6 +39,7 @@ app.MapPost("/api/index/{repositoryId}", async (string repositoryId, Cancellatio
         return Results.NotFound();
     }
 
+    var analyzer = ResolveAnalyzer(repository);
     var manifest = await indexStore.LoadManifestAsync(repositoryId, cancellationToken);
     var changeSet = await planner.PlanAsync(repository, manifest, cancellationToken);
     var analysis = await analyzer.AnalyzeAsync(new RepositoryAnalysisRequest
@@ -61,6 +62,9 @@ app.MapPost("/api/index/{repositoryId}", async (string repositoryId, Cancellatio
     {
         repository = repository.Id,
         indexedAt = analysis.Manifest.IndexedAt,
+        analyzer = analyzer.Id,
+        detectionMode = changeSet.DetectionMode,
+        headCommit = changeSet.HeadCommit,
         files = analysis.Manifest.Files.Count,
         documents = analysis.Documents.Count,
         graph = analysis.Graph.Summary
@@ -74,7 +78,8 @@ app.MapPost("/api/query", async (RepositoryQueryRequest request, CancellationTok
         Text = request.Query,
         Intent = ParseIntent(request.Intent),
         RepositoryIds = request.Repositories,
-        Limit = request.Limit
+        Limit = request.Limit,
+        GraphDepth = request.GraphDepth
     }, cancellationToken);
 
     return Results.Ok(result);
@@ -222,16 +227,69 @@ app.MapGet("/api/cards", async (string symbol, string? level, CancellationToken 
     return Results.Ok(cards);
 });
 
+app.MapGet("/api/source/snippet", async (string repositoryId, string? symbol, string? filePath, CancellationToken cancellationToken) =>
+{
+    var index = await indexStore.LoadAsync(repositoryId, cancellationToken);
+    if (index is null)
+    {
+        return Results.NotFound();
+    }
+
+    KnowledgeNode? node = null;
+    if (!string.IsNullOrWhiteSpace(symbol))
+    {
+        node = index.Graph.Nodes.FirstOrDefault(item => string.Equals(item.Symbol, symbol, StringComparison.Ordinal));
+    }
+    else if (!string.IsNullOrWhiteSpace(filePath))
+    {
+        node = index.Graph.Nodes
+            .Where(item => string.Equals(item.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => item.StartLine ?? int.MaxValue)
+            .FirstOrDefault();
+    }
+
+    if (node is null || string.IsNullOrWhiteSpace(node.FilePath) || !File.Exists(node.FilePath))
+    {
+        return Results.NotFound();
+    }
+
+    var allLines = await File.ReadAllLinesAsync(node.FilePath, cancellationToken);
+    var startLine = Math.Max(1, (node.StartLine ?? 1) - 4);
+    var endLine = Math.Min(allLines.Length, (node.EndLine ?? Math.Min(allLines.Length, startLine + 24)) + 4);
+    var snippet = allLines[(startLine - 1)..endLine];
+
+    return Results.Ok(new SourceSnippetResult(
+        node.FilePath,
+        startLine,
+        endLine,
+        string.Join(Environment.NewLine, snippet)));
+});
+
 app.Run();
 
-static string ResolveWorkspaceRoot()
+static string ResolveCodeBrainWorkspaceRoot()
 {
-    var current = AppContext.BaseDirectory;
-    var directory = new DirectoryInfo(current);
+    var fromBaseDirectory = FindByMarker(AppContext.BaseDirectory, "CodeBrain.sln");
+    if (fromBaseDirectory is not null)
+    {
+        return fromBaseDirectory;
+    }
+
+    var fromCurrentDirectory = FindByMarker(Directory.GetCurrentDirectory(), "CodeBrain.sln");
+    if (fromCurrentDirectory is not null)
+    {
+        return fromCurrentDirectory;
+    }
+
+    throw new InvalidOperationException("Unable to locate the CodeBrain workspace root.");
+}
+
+static string? FindByMarker(string startPath, string markerFileName)
+{
+    var directory = new DirectoryInfo(startPath);
     while (directory is not null)
     {
-        if (File.Exists(Path.Combine(directory.FullName, "CodeBrain.sln")) ||
-            File.Exists(Path.Combine(directory.FullName, "codebrain.config.json")))
+        if (File.Exists(Path.Combine(directory.FullName, markerFileName)))
         {
             return directory.FullName;
         }
@@ -239,7 +297,7 @@ static string ResolveWorkspaceRoot()
         directory = directory.Parent;
     }
 
-    return Directory.GetCurrentDirectory();
+    return null;
 }
 
 static QueryIntent ParseIntent(string? raw)
@@ -254,6 +312,22 @@ static QueryIntent ParseIntent(string? raw)
     };
 }
 
+static CodeBrain.Core.Abstractions.IRepositoryAnalyzer ResolveAnalyzer(RegisteredRepository repository)
+{
+    CodeBrain.Core.Abstractions.IRepositoryAnalyzer[] analyzers =
+    [
+        new CSharpRepositoryAnalyzer(),
+        new TextStructureRepositoryAnalyzer()
+    ];
+
+    return analyzers.FirstOrDefault(analyzer =>
+               string.Equals(analyzer.Id, repository.AnalyzerId, StringComparison.OrdinalIgnoreCase) &&
+               analyzer.CanHandle(repository))
+           ?? analyzers.First(analyzer => analyzer.CanHandle(repository));
+}
+
 internal sealed record RegisterRepositoryRequest(string Path);
 
-internal sealed record RepositoryQueryRequest(string Query, List<string> Repositories, string? Intent, int Limit = 10);
+internal sealed record RepositoryQueryRequest(string Query, List<string> Repositories, string? Intent, int Limit = 10, int GraphDepth = 2);
+
+internal sealed record SourceSnippetResult(string FilePath, int StartLine, int EndLine, string Content);

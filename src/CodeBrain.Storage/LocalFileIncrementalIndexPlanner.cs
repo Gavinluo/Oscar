@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using CodeBrain.Core.Abstractions;
 using CodeBrain.Core.Models;
 
@@ -12,16 +11,39 @@ namespace CodeBrain.Storage;
 /// </summary>
 public sealed class LocalFileIncrementalIndexPlanner : IIncrementalIndexPlanner
 {
+    private readonly GitRepositoryInspector _gitInspector = new();
+
     public async Task<RepositoryChangeSet> PlanAsync(
         RegisteredRepository repository,
         RepositoryIndexManifest? existingManifest,
         CancellationToken cancellationToken)
     {
-        var currentFiles = await ScanFilesAsync(repository.RootPath, cancellationToken);
+        var currentFiles = await RepositoryFileScanner.ScanAsync(repository.RootPath, cancellationToken);
         var previousFiles = existingManifest?.Files.ToDictionary(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
                            ?? new Dictionary<string, RepositoryFileFingerprint>(StringComparer.OrdinalIgnoreCase);
+        var gitState = await _gitInspector.TryInspectAsync(repository.RootPath, cancellationToken);
 
-        var changeSet = new RepositoryChangeSet();
+        var changeSet = new RepositoryChangeSet
+        {
+            DetectionMode = gitState is null ? "filesystem" : "git",
+            HeadCommit = gitState?.HeadCommit
+        };
+
+        if (gitState is not null)
+        {
+            changeSet.GitModified.AddRange(gitState.ModifiedPaths);
+            changeSet.GitUntracked.AddRange(gitState.UntrackedPaths);
+
+            if (existingManifest is not null &&
+                string.Equals(existingManifest.HeadCommit, gitState.HeadCommit, StringComparison.Ordinal) &&
+                gitState.ModifiedPaths.Count == 0 &&
+                gitState.UntrackedPaths.Count == 0 &&
+                previousFiles.Count == currentFiles.Count)
+            {
+                changeSet.Unchanged.AddRange(currentFiles.Select(file => file.RelativePath));
+                return changeSet;
+            }
+        }
 
         foreach (var current in currentFiles)
         {
@@ -51,53 +73,5 @@ public sealed class LocalFileIncrementalIndexPlanner : IIncrementalIndexPlanner
         }
 
         return changeSet;
-    }
-
-    public static async Task<List<RepositoryFileFingerprint>> ScanFilesAsync(string rootPath, CancellationToken cancellationToken)
-    {
-        var fingerprints = new List<RepositoryFileFingerprint>();
-        var allowedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ".cs", ".csproj", ".sln", ".json", ".md"
-        };
-
-        foreach (var file in Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!allowedExtensions.Contains(Path.GetExtension(file)))
-            {
-                continue;
-            }
-
-            var info = new FileInfo(file);
-            await using var stream = File.OpenRead(file);
-            var hash = await SHA256.HashDataAsync(stream, cancellationToken);
-
-            fingerprints.Add(new RepositoryFileFingerprint
-            {
-                RelativePath = Path.GetRelativePath(rootPath, file),
-                Size = info.Length,
-                LastWriteTimeUtc = info.LastWriteTimeUtc,
-                ContentHash = Convert.ToHexString(hash),
-                Language = GuessLanguage(file)
-            });
-        }
-
-        return fingerprints.OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    private static string GuessLanguage(string path)
-    {
-        return string.Equals(Path.GetExtension(path), ".cs", StringComparison.OrdinalIgnoreCase)
-            ? "csharp"
-            : "text";
     }
 }

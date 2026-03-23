@@ -21,6 +21,7 @@ public sealed class TestWriterAgent : IAgent
         {
             throw new InvalidOperationException("Test plan missing in pipeline context.");
         }
+        var editPlan = context.Items[PipelineKeys.CurrentEditPlan] as RepositoryEditPlan;
 
         var testProjectPath = context.Items.TryGetValue(PipelineKeys.TestProjectPath, out var testProjObj)
             ? testProjObj as string
@@ -44,6 +45,12 @@ public sealed class TestWriterAgent : IAgent
         sb.AppendLine("[TestFixture]");
         sb.AppendLine($"public class {className}");
         sb.AppendLine("{");
+        if (editPlan is not null)
+        {
+            sb.AppendLine($"    // Edit goal: {EscapeComment(editPlan.Goal)}");
+            sb.AppendLine($"    // Verification: {EscapeComment(string.Join("; ", editPlan.VerificationSteps.Take(3)))}");
+            sb.AppendLine();
+        }
         foreach (var testCase in plan.Cases)
         {
             sb.AppendLine("    [Test]");

@@ -9,6 +9,8 @@ public sealed class LoopOrchestrator : IOrchestrator
     private readonly RepoMapperAgent _repoMapper;
     private readonly UnderstanderAgent _understander;
     private readonly DrilldownNavigatorAgent _drilldown;
+    private readonly ChangeScopeAgent _changeScope;
+    private readonly EditPlannerAgent _editPlanner;
     private readonly TestPlannerAgent _planner;
     private readonly TestWriterAgent _writer;
     private readonly RunnerAgent _runner;
@@ -20,6 +22,8 @@ public sealed class LoopOrchestrator : IOrchestrator
         RepoMapperAgent repoMapper,
         UnderstanderAgent understander,
         DrilldownNavigatorAgent drilldown,
+        ChangeScopeAgent changeScope,
+        EditPlannerAgent editPlanner,
         TestPlannerAgent planner,
         TestWriterAgent writer,
         RunnerAgent runner,
@@ -30,6 +34,8 @@ public sealed class LoopOrchestrator : IOrchestrator
         _repoMapper = repoMapper;
         _understander = understander;
         _drilldown = drilldown;
+        _changeScope = changeScope;
+        _editPlanner = editPlanner;
         _planner = planner;
         _writer = writer;
         _runner = runner;
@@ -54,6 +60,8 @@ public sealed class LoopOrchestrator : IOrchestrator
                 context.State.IterationCount = iteration;
                 await _understander.ExecuteAsync(context, cancellationToken);
                 await _drilldown.ExecuteAsync(context, cancellationToken);
+                await _changeScope.ExecuteAsync(context, cancellationToken);
+                await _editPlanner.ExecuteAsync(context, cancellationToken);
                 await _planner.ExecuteAsync(context, cancellationToken);
                 await _writer.ExecuteAsync(context, cancellationToken);
                 await _runner.ExecuteAsync(context, cancellationToken);
@@ -158,6 +166,15 @@ public sealed class LoopOrchestrator : IOrchestrator
             foreach (var hotspot in coverage.Hotspots.Take(5))
             {
                 sb.AppendLine($"  - Hotspot: {hotspot.FileOrType} (line={hotspot.LineCoverage:F2}, branch={hotspot.BranchCoverage:F2})");
+            }
+        }
+
+        if (context.Items[PipelineKeys.CurrentEditPlan] is RepositoryEditPlan editPlan)
+        {
+            sb.AppendLine($"- Latest edit goal: {editPlan.Goal}");
+            foreach (var file in editPlan.FilesToInspect.Take(3))
+            {
+                sb.AppendLine($"  - Inspect: {file}");
             }
         }
 

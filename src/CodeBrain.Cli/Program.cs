@@ -2,6 +2,8 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Text.Json;
 using CodeBrain.Analysis.CSharp;
+using CodeBrain.Analysis.Text;
+using CodeBrain.Cli;
 using CodeBrain.Core.Abstractions;
 using CodeBrain.Core.Models;
 using CodeBrain.Execution;
@@ -31,8 +33,8 @@ static Command BuildReposCommand()
     add.AddOption(pathOption);
     add.SetHandler(async path =>
     {
-        var repoRoot = Directory.GetCurrentDirectory();
-        var catalog = new SqliteRepositoryCatalog(repoRoot);
+        var codeBrainRoot = WorkspacePaths.ResolveCodeBrainRoot();
+        var catalog = new SqliteRepositoryCatalog(codeBrainRoot);
         var repository = await catalog.RegisterAsync(path, CancellationToken.None);
         Console.WriteLine(JsonSerializer.Serialize(repository, JsonOptions()));
     }, pathOption);
@@ -40,8 +42,8 @@ static Command BuildReposCommand()
     var list = new Command("list", "List repositories known to the local CodeBrain catalog.");
     list.SetHandler(async () =>
     {
-        var repoRoot = Directory.GetCurrentDirectory();
-        var catalog = new SqliteRepositoryCatalog(repoRoot);
+        var codeBrainRoot = WorkspacePaths.ResolveCodeBrainRoot();
+        var catalog = new SqliteRepositoryCatalog(codeBrainRoot);
         var repositories = await catalog.ListAsync(CancellationToken.None);
         Console.WriteLine(JsonSerializer.Serialize(repositories, JsonOptions()));
     });
@@ -58,14 +60,13 @@ static Command BuildIndexCommand()
     index.AddOption(repoOption);
     index.SetHandler(async repoId =>
     {
-        var workspaceRoot = Directory.GetCurrentDirectory();
-        var catalog = new SqliteRepositoryCatalog(workspaceRoot);
+        var codeBrainRoot = WorkspacePaths.ResolveCodeBrainRoot();
+        var catalog = new SqliteRepositoryCatalog(codeBrainRoot);
         var planner = new LocalFileIncrementalIndexPlanner();
-        var store = new SqliteRepositoryIndexStore(workspaceRoot);
-        var analyzer = new CSharpRepositoryAnalyzer();
-
+        var store = new SqliteRepositoryIndexStore(codeBrainRoot);
         var repository = await catalog.GetAsync(repoId, CancellationToken.None)
             ?? throw new InvalidOperationException($"Unknown repository '{repoId}'. Run `codebrain repos add --path <path>` first.");
+        var analyzer = ResolveAnalyzer(repository);
         if (!analyzer.CanHandle(repository))
         {
             throw new InvalidOperationException($"Analyzer '{analyzer.Id}' cannot handle repository '{repoId}'.");
@@ -96,6 +97,9 @@ static Command BuildIndexCommand()
         {
             repository = repository.Id,
             indexedAt = analysis.Manifest.IndexedAt,
+            analyzer = analyzer.Id,
+            detectionMode = changeSet.DetectionMode,
+            headCommit = changeSet.HeadCommit,
             added = changeSet.Added.Count,
             modified = changeSet.Modified.Count,
             removed = changeSet.Removed.Count,
@@ -117,23 +121,26 @@ static Command BuildQueryCommand()
     var textOption = new Option<string>("--q", "Question or lookup text.") { IsRequired = true };
     var intentOption = new Option<string>("--intent", () => "codeqa", "Query intent: codeqa, symbol, impact, test, bug.");
     var limitOption = new Option<int>("--limit", () => 10, "Maximum number of hits.");
+    var graphDepthOption = new Option<int>("--graph-depth", () => 2, "Graph expansion depth for hybrid retrieval.");
     query.AddOption(repoOption);
     query.AddOption(textOption);
     query.AddOption(intentOption);
     query.AddOption(limitOption);
-    query.SetHandler(async (repos, text, intent, limit) =>
+    query.AddOption(graphDepthOption);
+    query.SetHandler(async (repos, text, intent, limit, graphDepth) =>
     {
-        var workspaceRoot = Directory.GetCurrentDirectory();
-        var store = new SqliteRepositoryIndexStore(workspaceRoot);
+        var codeBrainRoot = WorkspacePaths.ResolveCodeBrainRoot();
+        var store = new SqliteRepositoryIndexStore(codeBrainRoot);
         var result = await store.QueryAsync(new RepositoryQuery
         {
             RepositoryIds = repos.ToList(),
             Text = text,
             Intent = ParseIntent(intent),
-            Limit = limit
+            Limit = limit,
+            GraphDepth = graphDepth
         }, CancellationToken.None);
         Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions()));
-    }, repoOption, textOption, intentOption, limitOption);
+    }, repoOption, textOption, intentOption, limitOption, graphDepthOption);
 
     return query;
 }
@@ -147,8 +154,8 @@ static Command BuildInitCommand()
     init.AddOption(projectOption);
     init.SetHandler(async (sln, project) =>
     {
-        var repoRoot = Directory.GetCurrentDirectory();
-        await RunInitAsync(repoRoot, sln, project);
+        var workspaceRoot = WorkspacePaths.ResolveTargetWorkspaceRoot(sln ?? project);
+        await RunInitAsync(workspaceRoot, sln, project);
     }, slnOption, projectOption);
     return init;
 }
@@ -174,8 +181,8 @@ static Command BuildRunCommand()
     run.AddOption(llmOption);
     run.SetHandler(async (sln, targets, topK, depth, line, branch, iterations, llm) =>
     {
-        var repoRoot = Directory.GetCurrentDirectory();
-        await RunLoopAsync(repoRoot, sln, targets, topK, depth, line, branch, iterations, llm);
+        var workspaceRoot = WorkspacePaths.ResolveTargetWorkspaceRoot(sln);
+        await RunLoopAsync(workspaceRoot, sln, targets, topK, depth, line, branch, iterations, llm);
     }, slnOption, targetOption, topKOption, depthOption, coverageLineOption, coverageBranchOption, iterationsOption, llmOption);
     return run;
 }
@@ -223,7 +230,7 @@ static Command BuildServeCommand()
     serve.AddOption(portOption);
     serve.SetHandler(async port =>
     {
-        var workspaceRoot = Directory.GetCurrentDirectory();
+        var workspaceRoot = WorkspacePaths.ResolveCodeBrainRoot();
         await RunProcessAsync(
             "dotnet",
             $"run --project \"{Path.Combine(workspaceRoot, "src", "CodeBrain.Api", "CodeBrain.Api.csproj")}\" --urls http://localhost:{port}",
@@ -348,6 +355,8 @@ static async Task RunLoopAsync(
         new RepoMapperAgent(mapService, artifactStore),
         new UnderstanderAgent(mapService, artifactStore, artifactStore, provider),
         new DrilldownNavigatorAgent(mapService, artifactStore, artifactStore),
+        new ChangeScopeAgent(artifactStore),
+        new EditPlannerAgent(artifactStore),
         new TestPlannerAgent(artifactStore),
         new TestWriterAgent(artifactStore),
         new RunnerAgent(testExecution, artifactStore),
@@ -470,3 +479,17 @@ static JsonSerializerOptions JsonOptions() => new()
 {
     WriteIndented = true
 };
+
+static IRepositoryAnalyzer ResolveAnalyzer(RegisteredRepository repository)
+{
+    IRepositoryAnalyzer[] analyzers =
+    [
+        new CSharpRepositoryAnalyzer(),
+        new TextStructureRepositoryAnalyzer()
+    ];
+
+    return analyzers.FirstOrDefault(analyzer =>
+               string.Equals(analyzer.Id, repository.AnalyzerId, StringComparison.OrdinalIgnoreCase) &&
+               analyzer.CanHandle(repository))
+           ?? analyzers.First(analyzer => analyzer.CanHandle(repository));
+}

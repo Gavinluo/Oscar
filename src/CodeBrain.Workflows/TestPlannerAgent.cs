@@ -18,6 +18,8 @@ public sealed class TestPlannerAgent : IAgent
     {
         var symbol = context.Items[PipelineKeys.CurrentSymbol] as string
                      ?? throw new InvalidOperationException("Current symbol not set.");
+        var scope = context.Items[PipelineKeys.CurrentChangeScope] as RepositoryChangeScope;
+        var editPlan = context.Items[PipelineKeys.CurrentEditPlan] as RepositoryEditPlan;
 
         var plan = new TestPlan
         {
@@ -51,13 +53,27 @@ public sealed class TestPlannerAgent : IAgent
                 new TestPlanCase
                 {
                     Name = "BranchProbe",
-                    Arrange = "Set collaborators to trigger alternative branch.",
+                    Arrange = scope is null
+                        ? "Set collaborators to trigger alternative branch."
+                        : $"Set collaborators or neighboring symbols to cover scoped dependencies: {string.Join(", ", scope.RelatedSymbols.Take(3))}.",
                     Act = "Invoke target.",
                     Assert = "Verify branch-specific outcome.",
                     BranchCovered = "branch"
                 }
             }
         };
+
+        if (editPlan is not null && editPlan.VerificationSteps.Count > 0)
+        {
+            plan.Cases.Add(new TestPlanCase
+            {
+                Name = "ScopedVerification",
+                Arrange = $"Focus on scoped edit targets: {string.Join(", ", editPlan.SymbolsToEdit.Take(3))}.",
+                Act = "Invoke the path touched by the proposed edit.",
+                Assert = $"Verify the scoped behavior and rerun: {string.Join(", ", editPlan.VerificationSteps.Take(3))}.",
+                BranchCovered = "scope"
+            });
+        }
 
         context.Items[PipelineKeys.CurrentPlan] = plan;
         await _artifactStore.WriteJsonAsync(
