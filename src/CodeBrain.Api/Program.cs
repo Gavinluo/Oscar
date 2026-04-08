@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodeBrain.Analysis.CSharp;
 using CodeBrain.Analysis.Text;
 using CodeBrain.Core.Models;
@@ -19,6 +20,25 @@ var artifactStore = new FileArtifactStore(workspaceRoot);
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+app.MapGet("/api/workspace", async (CancellationToken cancellationToken) =>
+{
+    var repositories = await catalog.ListAsync(cancellationToken);
+    var items = new List<RepositoryWorkspaceItem>(repositories.Count);
+
+    foreach (var repository in repositories)
+    {
+        items.Add(await BuildWorkspaceItemAsync(repository, indexStore, cancellationToken));
+    }
+
+    var currentRepositoryId = items
+        .OrderByDescending(item => item.LastIndexedAt ?? DateTimeOffset.MinValue)
+        .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .Select(item => item.Id)
+        .FirstOrDefault();
+
+    return Results.Ok(new WorkspaceSnapshotResult(items, currentRepositoryId));
+});
 
 app.MapGet("/api/repos", async (CancellationToken cancellationToken) =>
 {
@@ -267,6 +287,36 @@ app.MapGet("/api/source/snippet", async (string repositoryId, string? symbol, st
 
 app.Run();
 
+static async Task<RepositoryWorkspaceItem> BuildWorkspaceItemAsync(
+    RegisteredRepository repository,
+    SqliteRepositoryIndexStore indexStore,
+    CancellationToken cancellationToken)
+{
+    var manifest = await indexStore.LoadManifestAsync(repository.Id, cancellationToken);
+    var index = await indexStore.LoadAsync(repository.Id, cancellationToken);
+    var branch = await TryGetGitBranchAsync(repository.RootPath, cancellationToken) ?? "no-git";
+    var fileCount = manifest?.Files.Count ?? await CountRepositoryFilesAsync(repository.RootPath, cancellationToken);
+    var summary = index?.Graph.Summary ?? new GraphSummary();
+    var status = repository.LastIndexedAt.HasValue ? "ready" : "not-indexed";
+
+    return new RepositoryWorkspaceItem(
+        repository.Id,
+        repository.DisplayName,
+        repository.RootPath,
+        repository.PrimaryLanguage,
+        repository.AnalyzerId,
+        repository.LastIndexedAt,
+        branch,
+        status,
+        new RepositoryWorkspaceSummary(
+            fileCount,
+            summary.NodeCount,
+            summary.EdgeCount,
+            summary.ProjectCount,
+            summary.SymbolCount,
+            summary.UnderstandingCardCount));
+}
+
 static string ResolveCodeBrainWorkspaceRoot()
 {
     var fromBaseDirectory = FindByMarker(AppContext.BaseDirectory, "CodeBrain.sln");
@@ -326,8 +376,89 @@ static CodeBrain.Core.Abstractions.IRepositoryAnalyzer ResolveAnalyzer(Registere
            ?? analyzers.First(analyzer => analyzer.CanHandle(repository));
 }
 
+static async Task<string?> TryGetGitBranchAsync(string repositoryRoot, CancellationToken cancellationToken)
+{
+    var branch = await TryRunGitCommandAsync("rev-parse --abbrev-ref HEAD", repositoryRoot, cancellationToken);
+    return string.IsNullOrWhiteSpace(branch) ? null : branch.Trim();
+}
+
+static async Task<string?> TryRunGitCommandAsync(string arguments, string workingDirectory, CancellationToken cancellationToken)
+{
+    try
+    {
+        if (!Directory.Exists(Path.Combine(workingDirectory, ".git")))
+        {
+            return null;
+        }
+
+        var startInfo = new ProcessStartInfo("git", arguments)
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return null;
+        }
+
+        var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        return process.ExitCode == 0 ? stdout : null;
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+static Task<int> CountRepositoryFilesAsync(string repositoryRoot, CancellationToken cancellationToken)
+{
+    return Task.Run(() =>
+    {
+        var count = 0;
+        foreach (var file in Directory.EnumerateFiles(repositoryRoot, "*", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (RepositoryFileScanner.ShouldSkipPath(file))
+            {
+                continue;
+            }
+
+            count++;
+        }
+
+        return count;
+    }, cancellationToken);
+}
+
 internal sealed record RegisterRepositoryRequest(string Path);
 
 internal sealed record RepositoryQueryRequest(string Query, List<string> Repositories, string? Intent, int Limit = 10, int GraphDepth = 2);
 
 internal sealed record SourceSnippetResult(string FilePath, int StartLine, int EndLine, string Content);
+
+internal sealed record WorkspaceSnapshotResult(IReadOnlyCollection<RepositoryWorkspaceItem> Repositories, string? CurrentRepositoryId);
+
+internal sealed record RepositoryWorkspaceItem(
+    string Id,
+    string DisplayName,
+    string RootPath,
+    string PrimaryLanguage,
+    string AnalyzerId,
+    DateTimeOffset? LastIndexedAt,
+    string Branch,
+    string Status,
+    RepositoryWorkspaceSummary Summary);
+
+internal sealed record RepositoryWorkspaceSummary(
+    int FileCount,
+    int NodeCount,
+    int EdgeCount,
+    int ProjectCount,
+    int SymbolCount,
+    int UnderstandingCardCount);

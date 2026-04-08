@@ -1,29 +1,22 @@
-const repositorySelect = document.getElementById("repositorySelect");
-const summaryGrid = document.getElementById("summaryGrid");
-const repositoryMeta = document.getElementById("repositoryMeta");
-const nodeList = document.getElementById("nodeList");
-const searchInput = document.getElementById("searchInput");
-const searchButton = document.getElementById("searchButton");
-const rebuildButton = document.getElementById("rebuildButton");
-const statusBadge = document.getElementById("statusBadge");
+const repositoryList = document.getElementById("repositoryList");
+const repositoryForm = document.getElementById("repositoryForm");
+const repositoryPathInput = document.getElementById("repositoryPathInput");
+const addRepositoryButton = document.getElementById("addRepositoryButton");
+const activeRepositoryChip = document.getElementById("activeRepositoryChip");
 
+const queryForm = document.getElementById("queryForm");
 const questionInput = document.getElementById("questionInput");
 const intentSelect = document.getElementById("intentSelect");
 const graphDepthInput = document.getElementById("graphDepthInput");
 const limitInput = document.getElementById("limitInput");
 const askButton = document.getElementById("askButton");
 const browseButton = document.getElementById("browseButton");
+const statusBadge = document.getElementById("statusBadge");
+const chatTimeline = document.getElementById("chatTimeline");
 
-const answerSummary = document.getElementById("answerSummary");
-const strategyChip = document.getElementById("strategyChip");
-const queryMeta = document.getElementById("queryMeta");
-const editPlanView = document.getElementById("editPlanView");
-const evidenceList = document.getElementById("evidenceList");
-
-const contextSummary = document.getElementById("contextSummary");
-const filesList = document.getElementById("filesList");
-const symbolsList = document.getElementById("symbolsList");
-const neighborsList = document.getElementById("neighborsList");
+const searchInput = document.getElementById("searchInput");
+const searchButton = document.getElementById("searchButton");
+const nodeList = document.getElementById("nodeList");
 
 const sourceMeta = document.getElementById("sourceMeta");
 const sourceView = document.getElementById("sourceView");
@@ -31,7 +24,8 @@ const contextCards = document.getElementById("contextCards");
 const impactCards = document.getElementById("impactCards");
 
 let activeRepositoryId = null;
-let repositoriesCache = [];
+let workspaceSnapshot = { repositories: [] };
+let chatHistory = [];
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
@@ -55,64 +49,204 @@ function escapeHtml(value) {
     .replaceAll("\"", "&quot;");
 }
 
-function renderSummary(summary) {
-  const items = [
-    ["Nodes", summary.nodeCount ?? 0],
-    ["Edges", summary.edgeCount ?? 0],
-    ["Projects", summary.projectCount ?? 0],
-    ["Symbols", summary.symbolCount ?? 0],
-    ["Cards", summary.understandingCardCount ?? 0],
-  ];
-
-  summaryGrid.innerHTML = items.map(([label, value]) => `
-    <div class="stat">
-      <span class="label">${label}</span>
-      <span class="value">${value}</span>
-    </div>
-  `).join("");
+function getActiveRepository() {
+  return workspaceSnapshot.repositories.find(item => item.id === activeRepositoryId) ?? null;
 }
 
-function renderRepositoryMeta() {
-  const repository = repositoriesCache.find(item => item.id === activeRepositoryId);
-  if (!repository) {
-    repositoryMeta.innerHTML = `<div class="emptyState inline">No repository selected.</div>`;
+function formatRelativeTime(value) {
+  if (!value) {
+    return "未建立索引";
+  }
+
+  const then = new Date(value);
+  const diffMs = Date.now() - then.getTime();
+  const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} 分钟前`;
+  }
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 48) {
+    return `${diffHours} 小时前`;
+  }
+
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays} 天前`;
+}
+
+function renderWorkspace(snapshot) {
+  workspaceSnapshot = snapshot ?? { repositories: [] };
+  const availableIds = new Set(workspaceSnapshot.repositories.map(item => item.id));
+  if (!availableIds.has(activeRepositoryId)) {
+    activeRepositoryId = workspaceSnapshot.currentRepositoryId ?? workspaceSnapshot.repositories[0]?.id ?? null;
+  }
+
+  renderRepositoryCards();
+  updateActiveRepositoryChip();
+}
+
+function renderRepositoryCards() {
+  const repositories = workspaceSnapshot.repositories ?? [];
+  if (!repositories.length) {
+    repositoryList.innerHTML = `<div class="panelEmpty">暂无仓库，请先添加本地仓库。</div>`;
     return;
   }
 
-  repositoryMeta.innerHTML = `
-    <div class="metaPair"><span>Analyzer</span><strong>${escapeHtml(repository.analyzerId)}</strong></div>
-    <div class="metaPair"><span>Language</span><strong>${escapeHtml(repository.primaryLanguage)}</strong></div>
-    <div class="metaPair"><span>Indexed</span><strong>${repository.lastIndexedAt ? new Date(repository.lastIndexedAt).toLocaleString() : "Not yet"}</strong></div>
-    <div class="metaPair wide"><span>Path</span><strong>${escapeHtml(repository.rootPath)}</strong></div>
-  `;
+  repositoryList.innerHTML = repositories.map(repository => {
+    const isActive = repository.id === activeRepositoryId;
+    const summary = repository.summary ?? {};
+    const branch = repository.branch || "no-git";
+    const statusTone = repository.status === "ready" ? "success" : "muted";
+    const updated = formatRelativeTime(repository.lastIndexedAt);
+    return `
+      <article class="repositoryCard${isActive ? " active" : ""}" data-repository-id="${repository.id}">
+        <button class="repositorySelect" type="button" data-action="select">
+          <div class="repositoryTitleRow">
+            <span class="repositoryChevron">${isActive ? "⌄" : "›"}</span>
+            <strong>${escapeHtml(repository.displayName)}</strong>
+          </div>
+          <div class="repositoryPath">${escapeHtml(repository.rootPath)}</div>
+          <div class="repositoryMetaLine">
+            <span>${escapeHtml(branch)}</span>
+            <span>•</span>
+            <span>${summary.fileCount ?? 0} files</span>
+          </div>
+        </button>
+        <div class="repositoryFooter">
+          <span class="statusPill ${statusTone}">${repository.status === "ready" ? "Ready" : "Not Indexed"}</span>
+          <button class="miniAction" type="button" data-action="reindex">Reindex</button>
+        </div>
+        <div class="repositoryUpdated">Updated ${escapeHtml(updated)}</div>
+      </article>
+    `;
+  }).join("");
+
+  for (const card of repositoryList.querySelectorAll(".repositoryCard")) {
+    const repositoryId = card.dataset.repositoryId;
+    card.querySelector('[data-action="select"]').addEventListener("click", async () => {
+      activeRepositoryId = repositoryId;
+      chatHistory = [];
+      renderRepositoryCards();
+      updateActiveRepositoryChip();
+      renderChatTimeline();
+      await loadNodes(searchInput.value.trim());
+      resetInspector();
+    });
+
+    card.querySelector('[data-action="reindex"]').addEventListener("click", async event => {
+      event.stopPropagation();
+      await reindexRepository(repositoryId);
+    });
+  }
 }
 
-function renderRepositories(repositories) {
-  repositoriesCache = repositories;
-  repositorySelect.innerHTML = repositories.map(repo => `
-    <option value="${repo.id}">${repo.displayName} (${repo.id})</option>
-  `).join("");
+function updateActiveRepositoryChip() {
+  const repository = getActiveRepository();
+  activeRepositoryChip.textContent = repository?.displayName ?? "未选择";
+}
 
-  activeRepositoryId = repositories[0]?.id ?? null;
-  repositorySelect.value = activeRepositoryId ?? "";
-  renderRepositoryMeta();
+function resetInspector() {
+  sourceMeta.textContent = "选择一个符号或证据项查看源码片段。";
+  sourceView.textContent = "No source loaded.";
+  contextCards.innerHTML = `<div class="panelEmpty">暂无上下文，请先提问或选择符号。</div>`;
+  impactCards.innerHTML = `<div class="panelEmpty">暂无影响分析，请先选择符号。</div>`;
+}
+
+function renderChatTimeline() {
+  if (!chatHistory.length) {
+    chatTimeline.innerHTML = `
+      <article class="messageCard assistant">
+        <div class="messageMeta">系统</div>
+        <div class="messageTitle">等待仓库问题</div>
+        <p>选择左侧仓库后输入问题，系统会返回上下文摘要、证据、修改建议和源码预览。</p>
+      </article>
+    `;
+    return;
+  }
+
+  chatTimeline.innerHTML = chatHistory.map(entry => {
+    if (entry.role === "user") {
+      return `
+        <article class="messageCard user">
+          <div class="messageMeta">你</div>
+          <div class="messageTitle">${escapeHtml(entry.title)}</div>
+          <p>${escapeHtml(entry.body)}</p>
+        </article>
+      `;
+    }
+
+    const result = entry.result;
+    const hits = result.hits ?? [];
+    const plan = result.suggestedEditPlan;
+    const evidenceMarkup = hits.length
+      ? `<div class="evidenceCluster">${hits.slice(0, 4).map(hit => `
+          <button class="evidencePill" type="button" data-symbol="${encodeURIComponent(hit.symbol ?? "")}" data-file="${encodeURIComponent(hit.filePath ?? "")}">
+            <span class="pillTitle">${escapeHtml(hit.title || "Untitled")}</span>
+            <span class="pillMeta">${Number(hit.score ?? 0).toFixed(2)}</span>
+          </button>
+        `).join("")}</div>`
+      : `<div class="subtleText">暂无证据命中。</div>`;
+
+    const planMarkup = plan
+      ? `
+        <div class="planCluster">
+          <div class="insightBlock">
+            <span class="insightLabel">建议修改目标</span>
+            <p>${escapeHtml(plan.goal)}</p>
+          </div>
+          <div class="insightBlock">
+            <span class="insightLabel">关键文件</span>
+            <ul>${(plan.filesToInspect || []).slice(0, 4).map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+          <div class="insightBlock">
+            <span class="insightLabel">验证步骤</span>
+            <ul>${(plan.verificationSteps || []).slice(0, 4).map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+        </div>
+      `
+      : "";
+
+    return `
+      <article class="messageCard assistant">
+        <div class="messageMeta">CodeBrain</div>
+        <div class="messageTitle">${escapeHtml(result.queryText)}</div>
+        <p>${escapeHtml(result.context?.summary || "暂无上下文摘要。")}</p>
+        <div class="messageStats">
+          <span>${escapeHtml(result.retrievalStrategy || "hybrid")}</span>
+          <span>${hits.length} evidence</span>
+          <span>${escapeHtml(String(result.intent ?? ""))}</span>
+        </div>
+        ${evidenceMarkup}
+        ${planMarkup}
+      </article>
+    `;
+  }).join("");
+
+  for (const pill of chatTimeline.querySelectorAll(".evidencePill")) {
+    pill.addEventListener("click", async () => {
+      const symbol = decodeURIComponent(pill.dataset.symbol || "");
+      const filePath = decodeURIComponent(pill.dataset.file || "");
+      await inspectSelection({ symbol, filePath });
+    });
+  }
 }
 
 function renderNodes(nodes) {
   if (!nodes.length) {
-    nodeList.innerHTML = `<div class="emptyState listEmpty">No matching nodes.</div>`;
+    nodeList.innerHTML = `<div class="panelEmpty">暂无符号，请先提问或完成索引。</div>`;
     return;
   }
 
   nodeList.innerHTML = nodes.map(node => `
-    <button class="listItem" data-symbol="${encodeURIComponent(node.symbol ?? "")}" data-file="${encodeURIComponent(node.filePath ?? "")}">
+    <button class="nodeItem" type="button" data-symbol="${encodeURIComponent(node.symbol ?? "")}" data-file="${encodeURIComponent(node.filePath ?? "")}">
       <strong>${escapeHtml(node.label || "(unnamed)")}</strong>
-      <div class="meta">${escapeHtml(node.kind)}${node.symbol ? ` | ${escapeHtml(node.symbol)}` : ""}</div>
-      <div class="meta">${escapeHtml(node.filePath ?? node.namespace ?? "")}</div>
+      <div class="nodeMeta">${escapeHtml(node.kind)}${node.symbol ? ` | ${escapeHtml(node.symbol)}` : ""}</div>
+      <div class="nodeMeta">${escapeHtml(node.filePath ?? node.namespace ?? "")}</div>
     </button>
   `).join("");
 
-  for (const element of nodeList.querySelectorAll(".listItem")) {
+  for (const element of nodeList.querySelectorAll(".nodeItem")) {
     element.addEventListener("click", async () => {
       const symbol = decodeURIComponent(element.dataset.symbol || "");
       const filePath = decodeURIComponent(element.dataset.file || "");
@@ -121,123 +255,9 @@ function renderNodes(nodes) {
   }
 }
 
-function renderContextBundle(context) {
-  contextSummary.innerHTML = context?.summary
-    ? `<div class="contextCallout">${escapeHtml(context.summary)}</div>`
-    : `<div class="emptyState inline">No assembled context.</div>`;
-
-  renderPillList(filesList, context?.files, "No files selected.");
-  renderPillList(symbolsList, context?.symbols, "No symbols selected.");
-  renderPillList(neighborsList, context?.graphNeighbors, "No graph neighbors.");
-}
-
-function renderPillList(element, items, emptyText) {
-  if (!items?.length) {
-    element.innerHTML = `<div class="emptyState inline">${escapeHtml(emptyText)}</div>`;
-    return;
-  }
-
-  element.innerHTML = items.map(item => `<button class="pill" data-value="${encodeURIComponent(item)}">${escapeHtml(item)}</button>`).join("");
-  for (const button of element.querySelectorAll(".pill")) {
-    button.addEventListener("click", async () => {
-      const value = decodeURIComponent(button.dataset.value || "");
-      await inspectSelection({ symbol: value, filePath: value.includes(":\\") ? value : "" });
-    });
-  }
-}
-
-function renderAnswer(result) {
-  const hits = result.hits ?? [];
-  answerSummary.innerHTML = `
-    <div class="answerLead">
-      <h3>${escapeHtml(result.queryText)}</h3>
-      <p>${escapeHtml(result.context?.summary || "No context summary available.")}</p>
-    </div>
-  `;
-  strategyChip.textContent = result.retrievalStrategy || "Hybrid Retrieval";
-  queryMeta.textContent = `${hits.length} evidence hits · intent ${result.intent}`;
-
-  renderEditPlan(result.suggestedEditPlan);
-  renderEvidence(hits);
-  renderContextBundle(result.context);
-}
-
-function renderEditPlan(plan) {
-  if (!plan) {
-    editPlanView.innerHTML = `<div class="emptyState inline">No edit plan available.</div>`;
-    return;
-  }
-
-  editPlanView.innerHTML = `
-    <div class="planCard">
-      <div class="planGoal">${escapeHtml(plan.goal)}</div>
-      <div class="planGrid">
-        <div>
-          <span class="sectionLabel">Files To Inspect</span>
-          <ul>${(plan.filesToInspect || []).slice(0, 6).map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
-        </div>
-        <div>
-          <span class="sectionLabel">Symbols To Edit</span>
-          <ul>${(plan.symbolsToEdit || []).slice(0, 6).map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
-        </div>
-        <div>
-          <span class="sectionLabel">Verification</span>
-          <ul>${(plan.verificationSteps || []).slice(0, 6).map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
-        </div>
-      </div>
-      <div class="riskCallout">${escapeHtml(plan.riskNotes || "No risk notes.")}</div>
-    </div>
-  `;
-}
-
-function renderEvidence(hits) {
-  if (!hits.length) {
-    evidenceList.innerHTML = `<div class="emptyState inline">No evidence returned.</div>`;
-    return;
-  }
-
-  evidenceList.innerHTML = hits.map((hit, index) => `
-    <article class="evidenceCard" data-symbol="${encodeURIComponent(hit.symbol ?? "")}" data-file="${encodeURIComponent(hit.filePath ?? "")}">
-      <div class="evidenceTop">
-        <div>
-          <span class="evidenceIndex">#${index + 1}</span>
-          <h4>${escapeHtml(hit.title || "(untitled hit)")}</h4>
-        </div>
-        <div class="scoreBadge">${Number(hit.score ?? 0).toFixed(2)}</div>
-      </div>
-      <p class="evidenceContent">${escapeHtml(hit.content || "")}</p>
-      <div class="scoreBreakdown">
-        <span>BM25 ${Number(hit.bm25Score ?? 0).toFixed(2)}</span>
-        <span>Vector ${Number(hit.vectorScore ?? 0).toFixed(2)}</span>
-        <span>Graph ${Number(hit.graphScore ?? 0).toFixed(2)}</span>
-      </div>
-      <div class="evidenceMeta">${escapeHtml(hit.filePath || hit.symbol || "")}</div>
-    </article>
-  `).join("");
-
-  for (const card of evidenceList.querySelectorAll(".evidenceCard")) {
-    card.addEventListener("click", async () => {
-      const symbol = decodeURIComponent(card.dataset.symbol || "");
-      const filePath = decodeURIComponent(card.dataset.file || "");
-      await inspectSelection({ symbol, filePath });
-    });
-  }
-}
-
-function renderSourceSnippet(snippet) {
-  if (!snippet) {
-    sourceMeta.textContent = "No source loaded.";
-    sourceView.textContent = "No source loaded.";
-    return;
-  }
-
-  sourceMeta.textContent = `${snippet.filePath} · lines ${snippet.startLine}-${snippet.endLine}`;
-  sourceView.textContent = snippet.content;
-}
-
 function renderContextDetails(context) {
   if (!context) {
-    contextCards.innerHTML = `<div class="emptyState inline">No context loaded.</div>`;
+    contextCards.innerHTML = `<div class="panelEmpty">暂无上下文，请先提问或选择符号。</div>`;
     return;
   }
 
@@ -247,12 +267,12 @@ function renderContextDetails(context) {
     <div class="detailCard">
       <div class="detailHeader">${escapeHtml(context.symbol || "Unknown symbol")}</div>
       <div class="detailSection">
-        <span class="sectionLabel">Related Nodes</span>
+        <span class="insightLabel">Related Nodes</span>
         <ul>${relatedNodes.map(node => `<li>${escapeHtml(node.symbol || node.label)}</li>`).join("")}</ul>
       </div>
       <div class="detailSection">
-        <span class="sectionLabel">Outgoing Edges</span>
-        <ul>${outgoingEdges.map(edge => `<li>${escapeHtml(edge.kind)} → ${escapeHtml(edge.to)}</li>`).join("")}</ul>
+        <span class="insightLabel">Outgoing Edges</span>
+        <ul>${outgoingEdges.map(edge => `<li>${escapeHtml(edge.kind)} -> ${escapeHtml(edge.to)}</li>`).join("")}</ul>
       </div>
     </div>
   `;
@@ -260,7 +280,7 @@ function renderContextDetails(context) {
 
 function renderImpactDetails(impact) {
   if (!impact) {
-    impactCards.innerHTML = `<div class="emptyState inline">No impact loaded.</div>`;
+    impactCards.innerHTML = `<div class="panelEmpty">暂无影响分析，请先选择符号。</div>`;
     return;
   }
 
@@ -268,31 +288,31 @@ function renderImpactDetails(impact) {
     <div class="detailCard">
       <div class="detailHeader">${escapeHtml(impact.symbol || "Unknown symbol")}</div>
       <div class="detailSection">
-        <span class="sectionLabel">Impacted Nodes</span>
+        <span class="insightLabel">Impacted Nodes</span>
         <ul>${(impact.impactedNodes || []).slice(0, 16).map(node => `<li>${escapeHtml(node.symbol || node.label)}</li>`).join("")}</ul>
       </div>
       <div class="detailSection">
-        <span class="sectionLabel">Traversed Edges</span>
-        <ul>${(impact.traversedEdges || []).slice(0, 16).map(edge => `<li>${escapeHtml(edge.kind)}: ${escapeHtml(edge.from)} → ${escapeHtml(edge.to)}</li>`).join("")}</ul>
+        <span class="insightLabel">Traversed Edges</span>
+        <ul>${(impact.traversedEdges || []).slice(0, 16).map(edge => `<li>${escapeHtml(edge.kind)}: ${escapeHtml(edge.from)} -> ${escapeHtml(edge.to)}</li>`).join("")}</ul>
       </div>
     </div>
   `;
 }
 
-async function loadRepositories() {
-  const repositories = await getJson("/api/repos");
-  renderRepositories(repositories);
-}
-
-async function loadSummary() {
-  if (!activeRepositoryId) {
-    renderSummary({});
+function renderSourceSnippet(snippet) {
+  if (!snippet) {
+    sourceMeta.textContent = "No source loaded.";
+    sourceView.textContent = "No source loaded.";
     return;
   }
 
-  const summary = await getJson(`/api/graph/summary?repositoryId=${encodeURIComponent(activeRepositoryId)}`);
-  renderSummary(summary);
-  renderRepositoryMeta();
+  sourceMeta.textContent = `${snippet.filePath} | lines ${snippet.startLine}-${snippet.endLine}`;
+  sourceView.textContent = snippet.content;
+}
+
+async function loadWorkspace() {
+  const snapshot = await getJson("/api/workspace");
+  renderWorkspace(snapshot);
 }
 
 async function loadNodes(term = "") {
@@ -301,14 +321,27 @@ async function loadNodes(term = "") {
     return;
   }
 
-  const nodes = await getJson(`/api/graph/nodes?repositoryId=${encodeURIComponent(activeRepositoryId)}&term=${encodeURIComponent(term)}&limit=50`);
-  renderNodes(nodes);
+  try {
+    const nodes = await getJson(`/api/graph/nodes?repositoryId=${encodeURIComponent(activeRepositoryId)}&term=${encodeURIComponent(term)}&limit=50`);
+    renderNodes(nodes);
+  } catch {
+    renderNodes([]);
+  }
 }
 
-async function runQuery() {
+async function runQuery(event) {
+  event?.preventDefault();
   if (!activeRepositoryId || !questionInput.value.trim()) {
     return;
   }
+
+  const queryText = questionInput.value.trim();
+  chatHistory.unshift({
+    role: "user",
+    title: getActiveRepository()?.displayName ?? "当前仓库",
+    body: queryText
+  });
+  renderChatTimeline();
 
   setStatus("Querying repository", "working");
   askButton.disabled = true;
@@ -317,7 +350,7 @@ async function runQuery() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        query: questionInput.value.trim(),
+        query: queryText,
         repositories: [activeRepositoryId],
         intent: intentSelect.value,
         limit: Number(limitInput.value || 8),
@@ -325,14 +358,34 @@ async function runQuery() {
       }),
     });
 
-    renderAnswer(result);
+    chatHistory.unshift({
+      role: "assistant",
+      result
+    });
+    renderChatTimeline();
+
     if (result.hits?.length) {
       const lead = result.hits[0];
       await inspectSelection({ symbol: lead.symbol || "", filePath: lead.filePath || "" });
+    } else {
+      resetInspector();
     }
+
+    await loadNodes(queryText);
     setStatus("Answer ready", "success");
   } catch (error) {
-    answerSummary.innerHTML = `<div class="emptyState inline">Query failed: ${escapeHtml(error.message)}</div>`;
+    chatHistory.unshift({
+      role: "assistant",
+      result: {
+        queryText,
+        retrievalStrategy: "failed",
+        intent: intentSelect.value,
+        hits: [],
+        context: { summary: `查询失败：${error.message}` },
+        suggestedEditPlan: null
+      }
+    });
+    renderChatTimeline();
     setStatus("Query failed", "error");
   } finally {
     askButton.disabled = false;
@@ -400,12 +453,59 @@ function switchTab(tabName) {
   }
 }
 
-repositorySelect.addEventListener("change", async () => {
-  activeRepositoryId = repositorySelect.value || null;
-  renderRepositoryMeta();
-  await loadSummary();
-  await loadNodes(searchInput.value.trim());
-});
+async function addRepository(event) {
+  event.preventDefault();
+  const path = repositoryPathInput.value.trim();
+  if (!path) {
+    return;
+  }
+
+  addRepositoryButton.disabled = true;
+  setStatus("Registering repository", "working");
+  try {
+    const repository = await getJson("/api/repos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path })
+    });
+
+    repositoryPathInput.value = "";
+    await loadWorkspace();
+    activeRepositoryId = repository.id;
+    chatHistory = [];
+    renderRepositoryCards();
+    updateActiveRepositoryChip();
+    renderChatTimeline();
+    await loadNodes();
+    resetInspector();
+    setStatus("Repository added", "success");
+  } catch (error) {
+    setStatus(`Add failed`, "error");
+  } finally {
+    addRepositoryButton.disabled = false;
+  }
+}
+
+async function reindexRepository(repositoryId) {
+  if (!repositoryId) {
+    return;
+  }
+
+  setStatus("Reindexing repository", "working");
+  try {
+    await getJson(`/api/index/${encodeURIComponent(repositoryId)}`, { method: "POST" });
+    await loadWorkspace();
+    if (repositoryId === activeRepositoryId) {
+      await loadNodes(searchInput.value.trim());
+    }
+    setStatus("Reindex finished", "success");
+  } catch {
+    setStatus("Reindex failed", "error");
+  }
+}
+
+queryForm.addEventListener("submit", runQuery);
+repositoryForm.addEventListener("submit", addRepository);
 
 searchButton.addEventListener("click", () => loadNodes(searchInput.value.trim()));
 searchInput.addEventListener("keydown", event => {
@@ -414,36 +514,15 @@ searchInput.addEventListener("keydown", event => {
   }
 });
 
-askButton.addEventListener("click", runQuery);
-questionInput.addEventListener("keydown", event => {
-  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-    runQuery();
-  }
-});
-
 browseButton.addEventListener("click", async () => {
   await loadNodes(questionInput.value.trim());
   switchTab("source");
 });
 
-rebuildButton.addEventListener("click", async () => {
-  if (!activeRepositoryId) {
-    return;
-  }
-
-  rebuildButton.disabled = true;
-  setStatus("Reindexing repository", "working");
-  try {
-    await getJson(`/api/index/${encodeURIComponent(activeRepositoryId)}`, { method: "POST" });
-    repositoriesCache = await getJson("/api/repos");
-    renderRepositories(repositoriesCache);
-    await loadSummary();
-    await loadNodes(searchInput.value.trim());
-    setStatus("Reindex finished", "success");
-  } catch (error) {
-    setStatus("Reindex failed", "error");
-  } finally {
-    rebuildButton.disabled = false;
+questionInput.addEventListener("keydown", event => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    runQuery();
   }
 });
 
@@ -451,7 +530,16 @@ for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => switchTab(tab.dataset.tab));
 }
 
-await loadRepositories();
-await loadSummary();
-await loadNodes();
-setStatus("Workspace ready", "success");
+async function init() {
+  try {
+    await loadWorkspace();
+    await loadNodes();
+    resetInspector();
+    renderChatTimeline();
+    setStatus("Workspace ready", "success");
+  } catch {
+    setStatus("Workspace unavailable", "error");
+  }
+}
+
+init();
