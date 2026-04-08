@@ -1,4 +1,5 @@
 using CodeBrain.Analysis.Text;
+using CodeBrain.Core.Abstractions;
 using CodeBrain.Core.Models;
 using CodeBrain.Storage;
 
@@ -149,6 +150,70 @@ public class HybridRetrievalTests
     }
 
     [Test]
+    public async Task QueryAsync_UsesInjectedEmbeddingProviderModel()
+    {
+        var provider = new KeywordEmbeddingProvider("test-provider-v1");
+        var store = new SqliteRepositoryIndexStore(_root, embeddingProvider: provider);
+        var repository = new RegisteredRepository
+        {
+            Id = "provider-repo",
+            DisplayName = "provider-repo",
+            RootPath = _root,
+            AnalyzerId = "text-structure",
+            PrimaryLanguage = "typescript"
+        };
+
+        await store.SaveAsync(new RepositoryIndex
+        {
+            Repository = repository,
+            Manifest = new RepositoryIndexManifest
+            {
+                RepositoryId = repository.Id,
+                RepositoryRoot = repository.RootPath,
+                AnalyzerId = repository.AnalyzerId,
+                PrimaryLanguage = repository.PrimaryLanguage
+            },
+            Graph = new RepositoryKnowledgeGraph(),
+            Documents =
+            [
+                new RepositoryIndexDocument
+                {
+                    Id = "doc-payment",
+                    RepositoryId = repository.Id,
+                    Kind = "file",
+                    Title = "payment.ts",
+                    FilePath = Path.Combine(_root, "src", "payment.ts"),
+                    Content = "payment token reconciliation",
+                    SearchText = "payment token reconciliation"
+                },
+                new RepositoryIndexDocument
+                {
+                    Id = "doc-orders",
+                    RepositoryId = repository.Id,
+                    Kind = "file",
+                    Title = "orders.ts",
+                    FilePath = Path.Combine(_root, "src", "orders.ts"),
+                    Content = "orders dashboard",
+                    SearchText = "orders dashboard"
+                }
+            ]
+        }, CancellationToken.None);
+
+        var result = await store.QueryAsync(new RepositoryQuery
+        {
+            Text = "payment reconciliation",
+            Intent = QueryIntent.CodeQa,
+            RepositoryIds = [repository.Id],
+            Limit = 5,
+            GraphDepth = 1
+        }, CancellationToken.None);
+
+        Assert.That(result.Hits, Is.Not.Empty);
+        Assert.That(result.Hits[0].Title, Is.EqualTo("payment.ts"));
+        Assert.That(result.Hits[0].VectorScore, Is.GreaterThan(0.9d));
+    }
+
+    [Test]
     public void Detect_SelectsTextAnalyzerForNonCSharpRepository()
     {
         var repoRoot = Path.Combine(_root, "repo");
@@ -185,5 +250,23 @@ public class HybridRetrievalTests
 
         Assert.That(result.Documents.Any(doc => doc.Kind == "symbol" && doc.Title == "process_order"), Is.True);
         Assert.That(result.Graph.Nodes.Any(node => node.Symbol == "service.py::process_order"), Is.True);
+    }
+
+    private sealed class KeywordEmbeddingProvider(string modelId) : IEmbeddingProvider
+    {
+        public Task<RepositoryEmbedding> EmbedAsync(string? text, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalized = text ?? string.Empty;
+            var values = new double[3];
+            values[0] = normalized.Contains("payment", StringComparison.OrdinalIgnoreCase) ? 1d : 0d;
+            values[1] = normalized.Contains("reconciliation", StringComparison.OrdinalIgnoreCase) ? 1d : 0d;
+            values[2] = normalized.Contains("orders", StringComparison.OrdinalIgnoreCase) ? 1d : 0d;
+            return Task.FromResult(new RepositoryEmbedding
+            {
+                Model = modelId,
+                Values = values
+            });
+        }
     }
 }

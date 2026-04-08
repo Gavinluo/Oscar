@@ -108,9 +108,23 @@ internal sealed class HybridEditPlanningService : IEditPlanningService
     }
 }
 
+public sealed class LocalHashEmbeddingProvider : IEmbeddingProvider
+{
+    public const string ModelId = "local-hash-128";
+
+    public Task<RepositoryEmbedding> EmbedAsync(string? text, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new RepositoryEmbedding
+        {
+            Model = ModelId,
+            Values = LocalVectorMath.Embed(text)
+        });
+    }
+}
+
 /// <summary>
-/// Implements deterministic local vectors so the project can exercise hybrid
-/// retrieval without relying on an external embedding service.
+/// 使用确定性的本地向量，让项目在没有外部 embedding 服务时仍能完成混合检索。
 /// </summary>
 internal static class LocalVectorMath
 {

@@ -10,7 +10,10 @@ namespace CodeBrain.Storage;
 /// </summary>
 internal sealed class GitRepositoryInspector
 {
-    public async Task<GitRepositoryState?> TryInspectAsync(string repositoryRoot, CancellationToken cancellationToken)
+    public async Task<GitRepositoryState?> TryInspectAsync(
+        string repositoryRoot,
+        RepositoryIndexingOptions options,
+        CancellationToken cancellationToken)
     {
         if (!Directory.Exists(Path.Combine(repositoryRoot, ".git")))
         {
@@ -18,45 +21,92 @@ internal sealed class GitRepositoryInspector
         }
 
         var headCommit = await TryRunGitAsync("rev-parse HEAD", repositoryRoot, cancellationToken);
-        if (string.IsNullOrWhiteSpace(headCommit))
+        if (options.GitDiffTarget == GitDiffTarget.Head && string.IsNullOrWhiteSpace(headCommit))
         {
             return null;
         }
 
-        var statusOutput = await TryRunGitAsync("status --porcelain", repositoryRoot, cancellationToken);
-        var modified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var untracked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var staged = await LoadPathSetAsync("diff --name-only --cached", repositoryRoot, cancellationToken);
+        var unstaged = await LoadPathSetAsync("diff --name-only", repositoryRoot, cancellationToken);
+        var untracked = await LoadPathSetAsync("ls-files --others --exclude-standard", repositoryRoot, cancellationToken);
 
-        foreach (var line in SplitLines(statusOutput))
-        {
-            if (line.Length < 4)
-            {
-                continue;
-            }
-
-            var path = NormalizeGitPath(line[3..]);
-            if (line.StartsWith("??", StringComparison.Ordinal))
-            {
-                untracked.Add(path);
-            }
-            else
-            {
-                modified.Add(path);
-            }
-        }
-
-        var diffOutput = await TryRunGitAsync("diff --name-only HEAD --", repositoryRoot, cancellationToken);
-        foreach (var line in SplitLines(diffOutput))
-        {
-            modified.Add(NormalizeGitPath(line));
-        }
+        var selectedPaths = await ResolveSelectedPathsAsync(repositoryRoot, options, staged, unstaged, untracked, cancellationToken);
+        var modified = selectedPaths
+            .Where(path => !untracked.Contains(path))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return new GitRepositoryState
         {
-            HeadCommit = headCommit.Trim(),
+            HeadCommit = headCommit?.Trim(),
+            DiffTarget = options.GitDiffTarget,
+            ChangeFilter = options.GitChangeFilter,
+            SelectedPaths = selectedPaths.ToList(),
             ModifiedPaths = modified.ToList(),
+            StagedPaths = staged.ToList(),
+            UnstagedPaths = unstaged.ToList(),
             UntrackedPaths = untracked.ToList()
         };
+    }
+
+    private static async Task<HashSet<string>> LoadPathSetAsync(
+        string arguments,
+        string repositoryRoot,
+        CancellationToken cancellationToken)
+    {
+        var output = await TryRunGitAsync(arguments, repositoryRoot, cancellationToken);
+        return SplitLines(output)
+            .Select(NormalizeGitPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static async Task<HashSet<string>> ResolveSelectedPathsAsync(
+        string repositoryRoot,
+        RepositoryIndexingOptions options,
+        HashSet<string> staged,
+        HashSet<string> unstaged,
+        HashSet<string> untracked,
+        CancellationToken cancellationToken)
+    {
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (options.GitDiffTarget == GitDiffTarget.Head)
+        {
+            var diffArguments = options.GitChangeFilter switch
+            {
+                GitChangeFilter.Staged => "diff --name-only --cached HEAD --",
+                GitChangeFilter.Unstaged => "diff --name-only --",
+                _ => "diff --name-only HEAD --"
+            };
+
+            var diffOutput = await TryRunGitAsync(diffArguments, repositoryRoot, cancellationToken);
+            foreach (var line in SplitLines(diffOutput))
+            {
+                selected.Add(NormalizeGitPath(line));
+            }
+        }
+        else
+        {
+            switch (options.GitChangeFilter)
+            {
+                case GitChangeFilter.Staged:
+                    selected.UnionWith(staged);
+                    break;
+                case GitChangeFilter.Unstaged:
+                    selected.UnionWith(unstaged);
+                    break;
+                default:
+                    selected.UnionWith(staged);
+                    selected.UnionWith(unstaged);
+                    break;
+            }
+        }
+
+        if (options.GitChangeFilter != GitChangeFilter.Staged)
+        {
+            selected.UnionWith(untracked);
+        }
+
+        return selected;
     }
 
     private static async Task<string?> TryRunGitAsync(string arguments, string workingDirectory, CancellationToken cancellationToken)
@@ -78,8 +128,11 @@ internal sealed class GitRepositoryInspector
                 return null;
             }
 
-            var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
+            var stdout = await stdoutTask;
+            _ = await stderrTask;
             return process.ExitCode == 0 ? stdout : null;
         }
         catch
@@ -92,7 +145,7 @@ internal sealed class GitRepositoryInspector
     {
         return string.IsNullOrWhiteSpace(value)
             ? Array.Empty<string>()
-            : value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            : value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
     }
 
     private static string NormalizeGitPath(string value)
@@ -103,7 +156,12 @@ internal sealed class GitRepositoryInspector
 
 internal sealed class GitRepositoryState
 {
-    public string HeadCommit { get; set; } = string.Empty;
+    public string? HeadCommit { get; set; }
+    public GitDiffTarget DiffTarget { get; set; } = GitDiffTarget.Head;
+    public GitChangeFilter ChangeFilter { get; set; } = GitChangeFilter.All;
+    public List<string> SelectedPaths { get; set; } = new();
     public List<string> ModifiedPaths { get; set; } = new();
+    public List<string> StagedPaths { get; set; } = new();
+    public List<string> UnstagedPaths { get; set; } = new();
     public List<string> UntrackedPaths { get; set; } = new();
 }

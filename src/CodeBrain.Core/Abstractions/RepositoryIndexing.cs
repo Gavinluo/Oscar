@@ -33,6 +33,11 @@ public interface IRepositoryQueryService
     Task<RepositoryQueryResult> QueryAsync(RepositoryQuery query, CancellationToken cancellationToken);
 }
 
+public interface IEmbeddingProvider
+{
+    Task<RepositoryEmbedding> EmbedAsync(string? text, CancellationToken cancellationToken);
+}
+
 public interface IContextAssembler
 {
     RepositoryContextBundle Assemble(

@@ -1,31 +1,30 @@
-# CodeBrain Architecture
+﻿# CodeBrain 架构说明
 
-## Overview
+## 总览
 
-CodeBrain now has three major execution paths that share the same persisted
-repository intelligence model:
+CodeBrain 当前有三条主要执行链路，它们共享同一套持久化仓库智能模型：
 
-1. Index pipeline.
-2. Query pipeline.
-3. Closed-loop modification and verification pipeline.
+1. 索引流水线。
+2. 查询流水线。
+3. 闭环修改与验证流水线。
 
-## System View
+## 系统视图
 
 ```mermaid
 flowchart LR
-    U["User / CLI / API"] --> CLI["CodeBrain.Cli"]
+    U["用户 / CLI / API"] --> CLI["CodeBrain.Cli"]
     U --> API["CodeBrain.Api"]
 
-    CLI --> CATALOG["Repository Catalog (SQLite)"]
-    CLI --> INDEX["Index Pipeline"]
-    CLI --> QUERY["Hybrid Query Pipeline"]
-    CLI --> LOOP["Closed-loop Workflow"]
+    CLI --> CATALOG["仓库目录（SQLite）"]
+    CLI --> INDEX["索引流水线"]
+    CLI --> QUERY["混合查询流水线"]
+    CLI --> LOOP["闭环工作流"]
 
     API --> CATALOG
     API --> INDEX
     API --> QUERY
 
-    INDEX --> ANALYZERS["Analyzer Backends"]
+    INDEX --> ANALYZERS["分析后端"]
     ANALYZERS --> ROSLYN["CodeBrain.Analysis.CSharp"]
     ANALYZERS --> TEXT["CodeBrain.Analysis.Text"]
 
@@ -37,57 +36,57 @@ flowchart LR
     LOOP --> ART["agent_artifacts"]
 ```
 
-## Index Pipeline
+## 索引流水线
 
 ```mermaid
 flowchart LR
     A["repos add"] --> B["RepositoryLanguageDetector"]
     B --> C["RegisteredRepository"]
     C --> D["index --repo <id>"]
-    D --> E["Load previous manifest"]
-    E --> F["Git-aware incremental planner"]
-    F --> G["Resolve analyzer backend"]
-    G --> H["Analyzer emits map + graph + documents"]
-    H --> I["Local embeddings generated"]
-    I --> J["SQLite persisted index"]
+    D --> E["加载历史清单"]
+    E --> F["Git 感知增量规划器"]
+    F --> G["解析分析后端"]
+    G --> H["分析器输出映射、图与文档"]
+    H --> I["生成本地向量"]
+    I --> J["SQLite 持久化索引"]
 ```
 
-Key points:
+关键点：
 
-- Repository registration selects the analyzer backend automatically.
-- `LocalFileIncrementalIndexPlanner` now prefers Git state when available.
-- The manifest records:
-  - analyzer id,
-  - primary language,
-  - head commit,
-  - change detection mode,
-  - file fingerprints.
+- 仓库注册会自动选择分析后端。
+- `LocalFileIncrementalIndexPlanner` 在 Git 可用时优先使用 Git 状态。
+- 清单会记录：
+  - 分析器 ID；
+  - 主语言；
+  - head commit；
+  - 变更检测模式；
+  - 文件指纹。
 
-## Query Pipeline
+## 查询流水线
 
 ```mermaid
 flowchart LR
-    A["query"] --> B["Load persisted docs + graph + embeddings"]
-    B --> C["BM25 lexical scorer"]
-    B --> D["Local vector scorer"]
-    B --> E["Graph neighborhood expansion"]
-    C --> F["Hybrid ranker"]
+    A["query"] --> B["加载持久化文档、图和向量"]
+    B --> C["BM25 词法评分器"]
+    B --> D["本地向量评分器"]
+    B --> E["图邻域扩展"]
+    C --> F["混合排序器"]
     D --> F
     E --> F
-    F --> G["Context assembler"]
-    G --> H["Edit planning service"]
+    F --> G["上下文组装器"]
+    G --> H["修改规划服务"]
     H --> I["RepositoryQueryResult"]
 ```
 
-The hybrid query result includes:
+混合查询结果包含：
 
-- ranked hits,
-- score decomposition,
-- related symbols,
-- assembled context bundle,
-- suggested edit plan.
+- 排名命中项；
+- 评分拆解；
+- 相关符号；
+- 组装后的上下文包；
+- 建议的修改计划。
 
-## Closed-loop Workflow
+## 闭环工作流
 
 ```mermaid
 flowchart LR
@@ -100,74 +99,69 @@ flowchart LR
     G --> H["TestWriterAgent"]
     H --> I["RunnerAgent"]
     I --> J["CoverageAgent"]
-    J --> K{"Threshold met?"}
-    K -- "No" --> C
-    K -- "Yes" --> L["MemoryAgent"]
+    J --> K{"达到阈值？"}
+    K -- "否" --> C
+    K -- "是" --> L["MemoryAgent"]
 ```
 
-This is the current implementation of the modification execution loop:
+这是当前修改执行闭环的实现方式：
 
-- retrieval and drilldown narrow the probable edit surface,
-- change scope captures bounded impact,
-- edit plan defines files, symbols, and verification targets,
-- test generation and execution validate the proposed change path.
+- 通过检索和深入分析收缩可能的修改面；
+- 用变更范围模型约束影响边界；
+- 用编辑计划定义文件、符号与验证目标；
+- 用测试生成和执行验证建议的修改路径。
 
-## Analyzer Backends
+## 分析后端
 
 ### `csharp-roslyn`
 
-Responsibilities:
+职责：
 
-- solution/project loading,
-- symbol resolution,
-- call graph extraction,
-- knowledge graph generation,
-- C# retrieval document generation.
+- 加载解决方案与项目；
+- 解析符号；
+- 提取调用图；
+- 生成知识图谱；
+- 生成 C# 检索文档。
 
 ### `text-structure`
 
-Responsibilities:
+职责：
 
-- non-C# file discovery,
-- simple declaration extraction,
-- simple import/reference extraction,
-- structural graph generation,
-- file/symbol document generation for retrieval.
+- 发现非 C# 文件；
+- 提取简单声明；
+- 提取简单 import/reference；
+- 生成结构图；
+- 生成面向检索的文件/符号文档。
 
-This backend is intentionally lightweight. Its purpose is to make the analyzer
-layer extensible before a deeper multi-language implementation is added.
+该后端目前故意保持轻量。目标是先把分析层抽象边界做稳，再引入更深入的多语言实现。
 
-## Core Data Models
+## 核心数据模型
 
 - `RegisteredRepository`
-  Repository identity and backend selection.
+  仓库身份信息与后端选择。
 - `RepositoryIndexManifest`
-  Persisted index metadata and Git/file fingerprints.
+  持久化索引元数据，以及 Git/文件指纹。
 - `RepositoryChangeSet`
-  Git-aware or filesystem-aware incremental diff summary.
+  Git 感知或文件系统感知的增量差异摘要。
 - `RepositoryIndexDocument`
-  Retrieval unit with explicit `SearchText`.
+  检索单元，带明确的 `SearchText`。
 - `RepositoryContextBundle`
-  Assembled evidence packet for QA and editing.
+  面向问答与编辑的证据包。
 - `RepositoryChangeScope`
-  Bounded edit surface derived from graph context.
+  基于图上下文推导出的受限编辑面。
 - `RepositoryEditPlan`
-  Suggested files, symbols, and verification actions.
+  建议修改的文件、符号与验证动作。
 
-## Design Notes
+## 设计说明
 
-- The local vector layer is deterministic and self-contained. It avoids an
-  external embedding dependency while still exercising the vector branch of the
-  hybrid retriever.
-- Hybrid retrieval quality is intentionally explainable. Each hit exposes the
-  BM25, vector, and graph contribution used to compute the final score.
-- The second analyzer backend is structural rather than semantic. It is
-  designed to validate the abstraction boundary first.
+- 本地向量层是确定性且自包含的。它避免依赖外部 embedding 服务，同时仍然覆盖混合检索中的向量分支。
+- 混合检索质量被设计成可解释的。每个命中项都会暴露 BM25、向量和图分数的贡献。
+- 第二分析后端目前是结构型而非语义型，其目的首先是验证抽象边界。
 
-## Next Recommended Improvements
+## 下一步建议改进
 
-1. Replace the local vector implementation with a pluggable embedding provider.
-2. Add Git diff range selection and staged/unstaged filtering to the planner.
-3. Move hybrid retrieval into a dedicated `CodeBrain.Search` project.
-4. Replace placeholder test scaffolds with edit-aware test synthesis.
-5. Extend the second backend from structural parsing to real AST-based parsing.
+1. 用可插拔的 embedding provider 替换当前本地向量实现。
+2. 为规划器增加 Git diff 范围选择和 staged/unstaged 过滤。
+3. 将混合检索拆分到独立的 `CodeBrain.Search` 项目。
+4. 用感知编辑意图的测试合成替换占位式测试脚手架。
+5. 将第二后端从结构解析升级到真实 AST 级别的实现。

@@ -14,7 +14,6 @@ var app = builder.Build();
 
 var workspaceRoot = ResolveCodeBrainWorkspaceRoot();
 var catalog = new SqliteRepositoryCatalog(workspaceRoot);
-var planner = new LocalFileIncrementalIndexPlanner();
 var indexStore = new SqliteRepositoryIndexStore(workspaceRoot);
 var artifactStore = new FileArtifactStore(workspaceRoot);
 
@@ -51,7 +50,7 @@ app.MapPost("/api/repos", async (RegisterRepositoryRequest request, Cancellation
     return Results.Ok(repository);
 });
 
-app.MapPost("/api/index/{repositoryId}", async (string repositoryId, CancellationToken cancellationToken) =>
+app.MapPost("/api/index/{repositoryId}", async (string repositoryId, string? diffTarget, string? diffFilter, CancellationToken cancellationToken) =>
 {
     var repository = await catalog.GetAsync(repositoryId, cancellationToken);
     if (repository is null)
@@ -61,7 +60,12 @@ app.MapPost("/api/index/{repositoryId}", async (string repositoryId, Cancellatio
 
     var analyzer = ResolveAnalyzer(repository);
     var manifest = await indexStore.LoadManifestAsync(repositoryId, cancellationToken);
-    var changeSet = await planner.PlanAsync(repository, manifest, cancellationToken);
+    var scopedPlanner = new LocalFileIncrementalIndexPlanner(new RepositoryIndexingOptions
+    {
+        GitDiffTarget = ParseGitDiffTarget(diffTarget),
+        GitChangeFilter = ParseGitChangeFilter(diffFilter)
+    });
+    var changeSet = await scopedPlanner.PlanAsync(repository, manifest, cancellationToken);
     var analysis = await analyzer.AnalyzeAsync(new RepositoryAnalysisRequest
     {
         Repository = repository,
@@ -85,6 +89,8 @@ app.MapPost("/api/index/{repositoryId}", async (string repositoryId, Cancellatio
         analyzer = analyzer.Id,
         detectionMode = changeSet.DetectionMode,
         headCommit = changeSet.HeadCommit,
+        diffTarget = changeSet.GitDiffTarget,
+        diffFilter = changeSet.GitChangeFilter,
         files = analysis.Manifest.Files.Count,
         documents = analysis.Documents.Count,
         graph = analysis.Graph.Summary
@@ -359,6 +365,25 @@ static QueryIntent ParseIntent(string? raw)
         "test" or "testgeneration" => QueryIntent.TestGeneration,
         "bug" or "buglocalization" => QueryIntent.BugLocalization,
         _ => QueryIntent.CodeQa
+    };
+}
+
+static GitDiffTarget ParseGitDiffTarget(string? raw)
+{
+    return raw?.Trim().ToLowerInvariant() switch
+    {
+        "worktree" or "workingtree" or "working-tree" => GitDiffTarget.WorkingTree,
+        _ => GitDiffTarget.Head
+    };
+}
+
+static GitChangeFilter ParseGitChangeFilter(string? raw)
+{
+    return raw?.Trim().ToLowerInvariant() switch
+    {
+        "staged" => GitChangeFilter.Staged,
+        "unstaged" => GitChangeFilter.Unstaged,
+        _ => GitChangeFilter.All
     };
 }
 

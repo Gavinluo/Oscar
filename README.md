@@ -1,119 +1,110 @@
-# CodeBrain
+﻿# CodeBrain
 
-CodeBrain is a local repository intelligence and closed-loop engineering
-assistant built on .NET 8. The current version supports persistent indexing,
-hybrid retrieval, context assembly, edit planning, Git-aware incremental
-analysis, and a closed-loop workflow for test-oriented validation.
+CodeBrain 是一个基于 .NET 8 的本地仓库智能分析与闭环工程助手。当前版本已经支持持久化索引、混合检索、上下文组装、修改规划、Git 感知的增量分析，以及面向测试验证的闭环工作流。
 
-Architecture details: [ARCHITECTURE.md](/D:/code/CodeBase/agentic_test_loop/ARCHITECTURE.md)
+架构说明见：[ARCHITECTURE.md](/D:/code/CodeBase/agentic_test_loop/ARCHITECTURE.md)
 
-## Current Capabilities
+## 当前能力
 
-- Local repository registration backed by SQLite.
-- Persistent repository indexes with manifest, graph snapshot, retrieval
-  documents, and local dense embeddings.
-- Git-aware incremental analysis with filesystem fallback.
-- Two analyzer backends:
-  - `csharp-roslyn` for C# solutions and projects.
-  - `text-structure` for non-C# local repositories using structural text
-    analysis.
-- Hybrid retrieval:
-  - BM25-style lexical scoring.
-  - Local vector scoring.
-  - Graph expansion and reranking.
-- Context assembly that returns:
-  - evidence hits,
-  - candidate symbols,
-  - candidate files,
-  - graph neighbors,
-  - verification targets.
-- Edit planning that turns retrieval context into a bounded modification plan.
-- Closed-loop workflow for:
-  - understanding,
-  - drilldown,
-  - change scope planning,
-  - edit planning,
-  - test planning,
-  - test scaffold generation,
-  - execution,
-  - coverage verification,
-  - draft-to-stable memory promotion.
+- 基于 SQLite 的本地仓库注册。
+- 持久化仓库索引，包含清单、图快照、检索文档和本地稠密向量。
+- 带 Git 感知能力的增量分析，并在 Git 不可用时回退到文件系统模式。
+- 两种分析后端：
+  - `csharp-roslyn`：用于 C# 解决方案与项目。
+  - `text-structure`：用于非 C# 本地仓库的结构化文本分析。
+- 混合检索能力：
+  - 类 BM25 的词法评分；
+  - 本地向量评分；
+  - 图扩展与重排。
+- 上下文组装结果包含：
+  - 证据命中；
+  - 候选符号；
+  - 候选文件；
+  - 图邻居；
+  - 验证目标。
+- 修改规划能力，可将检索上下文转成受控的修改计划。
+- 闭环工作流覆盖：
+  - 仓库理解；
+  - 深入分析；
+  - 变更范围规划；
+  - 修改规划；
+  - 测试规划；
+  - 测试脚手架生成；
+  - 执行；
+  - 覆盖率验证；
+  - 从草稿记忆提升为稳定记忆。
 
-## Project Layout
+## 项目结构
 
 - `src/CodeBrain.Core`
-  Shared contracts, repository models, context/editing models, and pipeline
-  state.
+  共享契约、仓库模型、上下文/编辑模型以及流水线状态。
 - `src/CodeBrain.Storage`
-  SQLite catalog, persisted index store, Git-aware incremental planner, hybrid
-  retrieval support.
+  SQLite 目录、持久化索引存储、Git 感知增量规划与混合检索支撑。
 - `src/CodeBrain.Analysis.CSharp`
-  Roslyn-based analyzer for C# repositories.
+  面向 C# 仓库的 Roslyn 分析器。
 - `src/CodeBrain.Analysis.Text`
-  Lightweight structural analyzer for non-C# repositories.
+  面向非 C# 仓库的轻量结构化分析器。
 - `src/CodeBrain.Workflows`
-  Closed-loop agents and orchestrator.
+  闭环代理与编排层。
 - `src/CodeBrain.Execution`
-  Test execution and coverage collection.
+  测试执行与覆盖率采集。
 - `src/CodeBrain.Cli`
-  CLI entry point.
+  CLI 入口。
 - `src/CodeBrain.Api`
-  Local HTTP API and browser UI.
+  本地 HTTP API 与浏览器界面。
 - `tests/CodeBrain.Tests`
-  Unit tests for storage, indexing, and retrieval behavior.
+  存储、索引与检索行为的单元测试。
 
-## Build
+## 构建
 
 ```bash
 dotnet build CodeBrain.sln
 dotnet test CodeBrain.sln --no-build
 ```
 
-## Register a Repository
+## 注册仓库
 
 ```bash
-dotnet run --project src/CodeBrain.Cli -- repos add --path <local-repository-path>
+dotnet run --project src/CodeBrain.Cli -- repos add --path <本地仓库路径>
 dotnet run --project src/CodeBrain.Cli -- repos list
 ```
 
-Repository registration auto-detects the primary language and selects the
-default analyzer backend.
+仓库注册会自动检测主语言，并选择默认分析后端。
 
-## Build or Refresh an Index
+## 构建或刷新索引
 
 ```bash
-dotnet run --project src/CodeBrain.Cli -- index --repo <repository-id>
+dotnet run --project src/CodeBrain.Cli -- index --repo <仓库ID>
 ```
 
-Indexing behavior:
+索引行为：
 
-- Loads the previous manifest if one exists.
-- Uses Git change information when the target repository is a Git checkout.
-- Falls back to filesystem fingerprints when Git is unavailable.
-- Persists:
-  - repository manifest,
-  - graph snapshot,
-  - retrieval documents,
-  - local dense embeddings.
+- 如果存在旧清单，则先加载旧清单。
+- 当目标仓库是 Git 工作区时，优先使用 Git 变更信息。
+- 当 Git 不可用时，回退到文件系统指纹。
+- 持久化内容包括：
+  - 仓库清单；
+  - 图快照；
+  - 检索文档；
+  - 本地稠密向量。
 
-Expected incremental behavior:
+期望的增量行为：
 
-- The first run after upgrading an older index can report one-time additions if
-  new tracked file types were added to the scanner.
-- The second run on an unchanged repository should normally report:
+- 升级旧索引后的第一次运行，若扫描器新增了跟踪文件类型，可能会出现一次性新增。
+- 对未变化仓库的第二次运行，通常应报告：
   - `added = 0`
   - `modified = 0`
   - `removed = 0`
 
-## Run Hybrid Retrieval
+## 运行混合检索
 
 ```bash
-dotnet run --project src/CodeBrain.Cli -- query --repo <repository-id> --q "Where is payment confirmation handled?" --intent codeqa --graph-depth 2
-dotnet run --project src/CodeBrain.Cli -- query --repo <repository-id> --q "FindAsync" --intent symbol
-dotnet run --project src/CodeBrain.Cli -- query --repo <repository-id> --q "What breaks if token billing changes?" --intent impact --graph-depth 3
+dotnet run --project src/CodeBrain.Cli -- query --repo <仓库ID> --q "支付确认逻辑在哪里处理？" --intent codeqa --graph-depth 2
+dotnet run --project src/CodeBrain.Cli -- query --repo <仓库ID> --q "FindAsync" --intent symbol
+dotnet run --project src/CodeBrain.Cli -- query --repo <仓库ID> --q "如果 token 计费规则变化，会影响哪些地方？" --intent impact --graph-depth 3
 ```
 
-Supported intents:
+支持的意图：
 
 - `codeqa`
 - `symbol`
@@ -121,32 +112,32 @@ Supported intents:
 - `test`
 - `bug`
 
-Query responses now include:
+查询结果现在包含：
 
-- ranked hits,
-- score breakdown (`bm25`, `vector`, `graph`),
-- assembled repository context,
-- suggested edit plan.
+- 排名后的命中项；
+- 评分拆解（`bm25`、`vector`、`graph`）；
+- 组装后的仓库上下文；
+- 建议的修改计划。
 
-## Initialize the Closed-loop Workflow
+## 初始化闭环工作流
 
 ```bash
-dotnet run --project src/CodeBrain.Cli -- init --sln <path-to-sln>
+dotnet run --project src/CodeBrain.Cli -- init --sln <解决方案路径>
 ```
 
-Initialization behavior:
+初始化行为：
 
-- Reuses an existing NUnit test project when possible.
-- Creates `RepoGeneratedTests` when needed.
-- Writes `codebrain.config.json`.
-- Prepares `agent_artifacts`.
+- 尽量复用已有 NUnit 测试项目。
+- 必要时创建 `RepoGeneratedTests`。
+- 写入 `codebrain.config.json`。
+- 准备 `agent_artifacts` 目录。
 
-## Run the Closed-loop Workflow
+## 运行闭环工作流
 
 ```bash
 dotnet run --project src/CodeBrain.Cli -- run \
-  --sln <path-to-sln-or-csproj> \
-  --target <symbol> \
+  --sln <解决方案或 csproj 路径> \
+  --target <目标符号> \
   --topk 5 \
   --depth 3 \
   --coverage-line 0.6 \
@@ -154,34 +145,34 @@ dotnet run --project src/CodeBrain.Cli -- run \
   --iterations 10
 ```
 
-Closed-loop workflow stages:
+闭环工作流阶段：
 
-1. Repository mapping.
-2. Understanding card generation.
-3. Drilldown dependency analysis.
-4. Change scope planning.
-5. Edit plan generation.
-6. Test plan generation.
-7. Test scaffold generation.
-8. Test execution.
-9. Coverage evaluation.
-10. Memory promotion if thresholds are met.
+1. 仓库映射。
+2. 理解卡片生成。
+3. 深入依赖分析。
+4. 变更范围规划。
+5. 修改计划生成。
+6. 测试计划生成。
+7. 测试脚手架生成。
+8. 测试执行。
+9. 覆盖率评估。
+10. 达标后进行记忆提升。
 
-The generated workflow artifacts now include:
+当前生成的工作流产物包括：
 
 - `*.changescope.json`
 - `*.editplan.json`
 - `*.testplan.json`
-- generated test scaffolds
-- coverage and run reports
+- 自动生成的测试脚手架
+- 覆盖率与运行报告
 
-## API and UI
+## API 与 UI
 
 ```bash
 dotnet run --project src/CodeBrain.Cli -- serve --port 5088
 ```
 
-Important endpoints:
+重要接口：
 
 - `GET /api/repos`
 - `POST /api/repos`
@@ -192,26 +183,23 @@ Important endpoints:
 - `GET /api/graph/impact?repositoryId=<id>&symbol=<full-symbol>`
 - `GET /api/source/snippet?repositoryId=<id>&symbol=<full-symbol>`
 
-The browser workspace now supports:
+当前浏览器工作台支持：
 
-- repository selection and reindexing,
-- direct natural-language repository questions,
-- hybrid answer rendering with score breakdown,
-- suggested edit-plan presentation,
-- evidence cards,
-- source snippet preview,
-- symbol context and impact exploration.
+- 选择仓库并重新建立索引；
+- 直接用自然语言提问仓库问题；
+- 以评分拆解形式展示混合答案；
+- 展示建议修改计划；
+- 证据卡片浏览；
+- 源码片段预览；
+- 符号上下文与影响范围探索。
 
-## Workspace Resolution Rules
+## 工作区解析规则
 
-- `repos add`, `repos list`, `index`, `query`, and `serve` always resolve the
-  CodeBrain workspace from `CodeBrain.sln`.
-- `init` and `run` resolve the target repository workspace from the explicit
-  `--sln` or `--project` path.
-- This keeps the local catalog/index databases stable while ensuring generated
-  test projects and artifacts land in the target repository.
+- `repos add`、`repos list`、`index`、`query` 和 `serve` 总是通过定位 `CodeBrain.sln` 来解析 CodeBrain 工作区。
+- `init` 和 `run` 则通过显式传入的 `--sln` 或 `--project` 路径解析目标仓库工作区。
+- 这样既能保持本地目录与索引数据库稳定，又能保证生成的测试项目和产物写入目标仓库。
 
-## Recommended Validation Flow
+## 推荐验证流程
 
 ```bash
 dotnet build CodeBrain.sln
@@ -222,5 +210,4 @@ dotnet run --no-build --project .\src\CodeBrain.Cli -- query --repo <repo-id> --
 dotnet run --no-build --project .\src\CodeBrain.Cli -- drill --sln <path-to-sln> --symbol "<symbol-from-query>"
 ```
 
-Using `--no-build` is recommended after the first successful build to skip the
-normal restore/build check that `dotnet run` performs before each launch.
+第一次成功构建后，建议后续使用 `--no-build`，以跳过 `dotnet run` 每次启动前默认执行的 restore/build 检查。

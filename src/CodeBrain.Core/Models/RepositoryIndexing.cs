@@ -47,6 +47,25 @@ public sealed class RepositoryIndexManifest
     public List<RepositoryFileFingerprint> Files { get; set; } = new();
 }
 
+public enum GitDiffTarget
+{
+    Head,
+    WorkingTree
+}
+
+public enum GitChangeFilter
+{
+    All,
+    Staged,
+    Unstaged
+}
+
+public sealed class RepositoryIndexingOptions
+{
+    public GitDiffTarget GitDiffTarget { get; set; } = GitDiffTarget.Head;
+    public GitChangeFilter GitChangeFilter { get; set; } = GitChangeFilter.All;
+}
+
 public sealed class RepositoryChangeSet
 {
     public List<string> Added { get; set; } = new();
@@ -55,7 +74,11 @@ public sealed class RepositoryChangeSet
     public List<string> Unchanged { get; set; } = new();
     public string DetectionMode { get; set; } = "filesystem";
     public string? HeadCommit { get; set; }
+    public string GitDiffTarget { get; set; } = nameof(CodeBrain.Core.Models.GitDiffTarget.Head);
+    public string GitChangeFilter { get; set; } = nameof(CodeBrain.Core.Models.GitChangeFilter.All);
     public List<string> GitModified { get; set; } = new();
+    public List<string> GitStaged { get; set; } = new();
+    public List<string> GitUnstaged { get; set; } = new();
     public List<string> GitUntracked { get; set; } = new();
 
     public bool HasChanges =>
@@ -76,6 +99,12 @@ public sealed class RepositoryIndexDocument
     public string? Language { get; set; }
     public string SearchText { get; set; } = string.Empty;
     public Dictionary<string, string> Metadata { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class RepositoryEmbedding
+{
+    public string Model { get; set; } = string.Empty;
+    public double[] Values { get; set; } = [];
 }
 
 public sealed class RepositoryAnalysisRequest

@@ -18,12 +18,17 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
     private static readonly HybridContextAssembler ContextAssembler = new();
     private static readonly HybridEditPlanningService EditPlanningService = new();
     private readonly string _connectionString;
+    private readonly IEmbeddingProvider _embeddingProvider;
 
-    public SqliteRepositoryIndexStore(string workspaceRoot, string artifactsRoot = "agent_artifacts")
+    public SqliteRepositoryIndexStore(
+        string workspaceRoot,
+        string artifactsRoot = "agent_artifacts",
+        IEmbeddingProvider? embeddingProvider = null)
     {
         var indexRoot = Path.Combine(workspaceRoot, artifactsRoot, "index");
         Directory.CreateDirectory(indexRoot);
         _connectionString = $"Data Source={Path.Combine(indexRoot, "codebrain.index.db")}";
+        _embeddingProvider = embeddingProvider ?? new LocalHashEmbeddingProvider();
         Initialize();
     }
 
@@ -63,7 +68,7 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
             document.SearchText = string.IsNullOrWhiteSpace(document.SearchText)
                 ? $"{document.Title} {document.Content} {document.Symbol} {document.FilePath}"
                 : document.SearchText;
-            var embedding = LocalVectorMath.Embed(document.SearchText);
+            var embedding = await _embeddingProvider.EmbedAsync(document.SearchText, cancellationToken);
 
             var documentCommand = connection.CreateCommand();
             documentCommand.Transaction = transaction;
@@ -93,8 +98,8 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
                 """;
             embeddingCommand.Parameters.AddWithValue("$document_id", document.Id);
             embeddingCommand.Parameters.AddWithValue("$repository_id", index.Repository.Id);
-            embeddingCommand.Parameters.AddWithValue("$embedding_json", JsonSerializer.Serialize(embedding, JsonOptions));
-            embeddingCommand.Parameters.AddWithValue("$embedding_model", "local-hash-128");
+            embeddingCommand.Parameters.AddWithValue("$embedding_json", JsonSerializer.Serialize(embedding.Values, JsonOptions));
+            embeddingCommand.Parameters.AddWithValue("$embedding_model", embedding.Model);
             await embeddingCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -170,8 +175,9 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
                 continue;
             }
 
+            var queryEmbedding = await _embeddingProvider.EmbedAsync(query.Text, cancellationToken);
             var embeddings = await LoadEmbeddingsAsync(repositoryId, cancellationToken);
-            var repoHits = ScoreRepository(query, index, embeddings);
+            var repoHits = ScoreRepository(query, index, embeddings, queryEmbedding);
             allHits.AddRange(repoHits);
             relatedNodes.AddRange(ExpandGraphNeighborhood(index.Graph, repoHits, query.GraphDepth));
         }
@@ -198,16 +204,17 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
     private List<RepositoryQueryHit> ScoreRepository(
         RepositoryQuery query,
         RepositoryIndex index,
-        IReadOnlyDictionary<string, double[]> embeddings)
+        IReadOnlyDictionary<string, RepositoryEmbedding> embeddings,
+        RepositoryEmbedding queryEmbedding)
     {
         var docs = index.Documents;
         var queryTerms = Tokenize(query.Text);
-        var queryVector = LocalVectorMath.Embed(query.Text);
         var bm25Scores = ComputeBm25Scores(docs, queryTerms);
         var vectorScores = docs.ToDictionary(
             document => document.Id,
             document => embeddings.TryGetValue(document.Id, out var embedding)
-                ? LocalVectorMath.CosineSimilarity(queryVector, embedding)
+                && string.Equals(embedding.Model, queryEmbedding.Model, StringComparison.Ordinal)
+                    ? LocalVectorMath.CosineSimilarity(queryEmbedding.Values, embedding.Values)
                 : 0d,
             StringComparer.Ordinal);
         var graphBoosts = ComputeGraphBoosts(index.Graph, docs, bm25Scores, vectorScores, query.GraphDepth);
@@ -671,7 +678,7 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
         return items;
     }
 
-    private async Task<IReadOnlyDictionary<string, double[]>> LoadEmbeddingsAsync(string repositoryId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyDictionary<string, RepositoryEmbedding>> LoadEmbeddingsAsync(string repositoryId, CancellationToken cancellationToken)
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -679,13 +686,13 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
         var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT document_id, embedding_json
+            SELECT document_id, embedding_json, embedding_model
             FROM repository_embeddings
             WHERE repository_id = $repository_id;
             """;
         command.Parameters.AddWithValue("$repository_id", repositoryId);
 
-        var result = new Dictionary<string, double[]>(StringComparer.Ordinal);
+        var result = new Dictionary<string, RepositoryEmbedding>(StringComparer.Ordinal);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -695,7 +702,11 @@ public sealed class SqliteRepositoryIndexStore : IRepositoryIndexStore, IReposit
                 continue;
             }
 
-            result[reader.GetString(0)] = embedding;
+            result[reader.GetString(0)] = new RepositoryEmbedding
+            {
+                Values = embedding,
+                Model = reader.GetString(2)
+            };
         }
 
         return result;

@@ -57,12 +57,20 @@ static Command BuildIndexCommand()
 {
     var index = new Command("index", "Build or refresh a persisted repository index.");
     var repoOption = new Option<string>("--repo", "Registered repository id.") { IsRequired = true };
+    var diffTargetOption = new Option<string>("--diff-target", () => "head", "Git diff target: head or worktree.");
+    var diffFilterOption = new Option<string>("--diff-filter", () => "all", "Git diff filter: all, staged, or unstaged.");
     index.AddOption(repoOption);
-    index.SetHandler(async repoId =>
+    index.AddOption(diffTargetOption);
+    index.AddOption(diffFilterOption);
+    index.SetHandler(async (repoId, diffTarget, diffFilter) =>
     {
         var codeBrainRoot = WorkspacePaths.ResolveCodeBrainRoot();
         var catalog = new SqliteRepositoryCatalog(codeBrainRoot);
-        var planner = new LocalFileIncrementalIndexPlanner();
+        var planner = new LocalFileIncrementalIndexPlanner(new RepositoryIndexingOptions
+        {
+            GitDiffTarget = ParseGitDiffTarget(diffTarget),
+            GitChangeFilter = ParseGitChangeFilter(diffFilter)
+        });
         var store = new SqliteRepositoryIndexStore(codeBrainRoot);
         var repository = await catalog.GetAsync(repoId, CancellationToken.None)
             ?? throw new InvalidOperationException($"Unknown repository '{repoId}'. Run `codebrain repos add --path <path>` first.");
@@ -100,6 +108,8 @@ static Command BuildIndexCommand()
             analyzer = analyzer.Id,
             detectionMode = changeSet.DetectionMode,
             headCommit = changeSet.HeadCommit,
+            diffTarget = changeSet.GitDiffTarget,
+            diffFilter = changeSet.GitChangeFilter,
             added = changeSet.Added.Count,
             modified = changeSet.Modified.Count,
             removed = changeSet.Removed.Count,
@@ -109,7 +119,7 @@ static Command BuildIndexCommand()
             edges = analysis.Graph.Summary.EdgeCount
         };
         Console.WriteLine(JsonSerializer.Serialize(payload, JsonOptions()));
-    }, repoOption);
+    }, repoOption, diffTargetOption, diffFilterOption);
 
     return index;
 }
@@ -407,6 +417,25 @@ static QueryIntent ParseIntent(string raw)
         "test" or "testgeneration" => QueryIntent.TestGeneration,
         "bug" or "buglocalization" => QueryIntent.BugLocalization,
         _ => QueryIntent.CodeQa
+    };
+}
+
+static GitDiffTarget ParseGitDiffTarget(string? raw)
+{
+    return raw?.Trim().ToLowerInvariant() switch
+    {
+        "worktree" or "workingtree" or "working-tree" => GitDiffTarget.WorkingTree,
+        _ => GitDiffTarget.Head
+    };
+}
+
+static GitChangeFilter ParseGitChangeFilter(string? raw)
+{
+    return raw?.Trim().ToLowerInvariant() switch
+    {
+        "staged" => GitChangeFilter.Staged,
+        "unstaged" => GitChangeFilter.Unstaged,
+        _ => GitChangeFilter.All
     };
 }
 

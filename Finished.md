@@ -2,6 +2,11 @@
 
 ## 2026-04-08
 
+- 完成 Git diff 范围选择能力，新增 `RepositoryIndexingOptions`，支持 `head/worktree` 目标与 `all/staged/unstaged` 过滤，让增量索引不再被迫总是围绕整个工作树运行。
+- 调整 `GitRepositoryInspector` 和 `LocalFileIncrementalIndexPlanner`，显式区分 staged、unstaged、untracked，并把最终选中的 Git 路径裁剪回 `Added/Modified/Removed` 结果，便于后续变更范围分析沿用同一套边界。
+- 在 `codebrain index` 和 `POST /api/index/{repositoryId}` 中暴露 diff 范围参数，同时把本次使用的 `diffTarget`、`diffFilter` 回写到索引结果，增强可验证性。
+- 新增 `IncrementalIndexPlannerTests`，覆盖 `head/worktree` 与 `staged/unstaged` 组合，并重新运行 `dotnet test CodeBrain.sln --no-restore`，结果为 28/28 通过。
+
 - 完成 `CodeBrain.Api` 的仓库管理工作台重构，将旧版表单式页面切换为“左侧仓库管理、右侧对话与预览”的双栏工程工作台布局，更贴近 Figma 中的用户仓库管理界面。
 - 新增 `GET /api/workspace` 聚合接口，统一返回仓库卡片所需的分支、文件数、索引状态和图摘要，避免前端自己拼接多轮请求。
 - 将仓库问答结果改造成右侧会话流表达，保留证据入口、修改建议和源码/上下文/影响预览之间的联动，强化“基于仓库的对话”而不是单次查询表单。

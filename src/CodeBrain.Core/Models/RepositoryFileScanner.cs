@@ -22,7 +22,8 @@ public static class RepositoryFileScanner
         ".go",
         ".rs",
         ".json",
-        ".md"
+        ".md",
+        ".txt"
     };
 
     public static async Task<List<RepositoryFileFingerprint>> ScanAsync(string rootPath, CancellationToken cancellationToken)
@@ -75,6 +76,7 @@ public static class RepositoryFileScanner
             ".rs" => "rust",
             ".json" => "json",
             ".md" => "markdown",
+            ".txt" => "text",
             _ => "text"
         };
     }
