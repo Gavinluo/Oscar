@@ -1,0 +1,16 @@
+{
+  "solution": "D:\\code\\CodeBase\\webapi\\QuantumCorp.ApiGates.sln",
+  "testProject": "D:\\code\\CodeBase\\agentic_test_loop\\tests\\AgenticTestLoop.Tests\\AgenticTestLoop.Tests.csproj",
+  "defaultTargets": [],
+  "drilldown": {
+    "topK": 5,
+    "maxDepth": 3
+  },
+  "coverage": {
+    "line": 0.6,
+    "branch": 0.4
+  },
+  "llm": "qwen",
+  "model": "qwen3-max-2026-01-23",
+  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+}
